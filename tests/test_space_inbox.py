@@ -27,10 +27,9 @@ class SpaceInboxCompositionTests(unittest.TestCase):
             app,
         )
         self.assertIn("registerView(inboxView);", app)
-        # Inbox sits between Sessions and Wiki in the nav; the registration
-        # order mirrors that so the import list reads like the tab bar.
+        # Inbox sits between Sessions and Setup in the primary nav.
         self.assertLess(app.index("registerView(sessionsView);"), app.index("registerView(inboxView);"))
-        self.assertLess(app.index("registerView(inboxView);"), app.index("registerView(wikiView);"))
+        self.assertLess(app.index("registerView(inboxView);"), app.index("registerView(secretsView);"))
 
     def test_badge_starts_after_the_registry_in_its_own_bulkhead(self) -> None:
         app = read("js/app.js")
@@ -43,7 +42,7 @@ class SpaceInboxCompositionTests(unittest.TestCase):
         html = read("index.html")
         self.assertIn('<link rel="stylesheet" href="css/inbox.css?v=20260914-accounts1">', html)
         self.assertLess(html.index("css/sharing.css?v="), html.index("css/inbox.css?v="))
-        self.assertIn('src="js/app.js?v=20260914-projectslens1"', html)
+        self.assertRegex(html, r'src="js/app\.js\?v=\d{8}-[a-z0-9]+"')
         # the registry creates #view-inbox itself; no section markup needed
         self.assertNotIn('id="view-inbox"', html)
 

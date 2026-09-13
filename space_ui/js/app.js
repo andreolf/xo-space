@@ -4,7 +4,7 @@
 import {registerView,startRegistry} from './core/registry.js?v=20260914-projectslens1';
 import {initServerWidget} from './core/server-widget.js?v=20260825-rename1';
 import {initLensSwitch} from './core/lens-switch.js?v=20260914-projectslens1';
-import {initPreview} from './core/preview.js?v=20260914-projectslens1';
+import {initPreview} from './core/preview.js?v=20260914-wikihub1';
 import {dashboardView,graphView,timeView} from './views/atlas.js?v=20260914-projectslens1';
 import sessionsView from './views/sessions.js?v=20260825-rename1';
 import inboxView,{initInboxBadge} from './views/inbox.js?v=20260914-accounts1';
@@ -13,7 +13,7 @@ import treeView from './views/tree.js?v=20260825-rename1';
 import sharingView from './views/sharing.js?v=20260914-accounts1';
 /* Chat is deliberately hidden from the tab bar: re-import ./views/chat.js
    and register it below to bring the tab back. */
-import wikiView from './views/wiki.js?v=20260914-projectslens1';
+import wikiView from './views/wiki.js?v=20260914-wikilink1';
 import quirqView from './views/quirq.js?v=20260817-plural1';
 import secretsView from './views/secrets.js?v=20260828-reporting1';
 import connectorsView from './views/connectors.js?v=20260914-accounts1';
@@ -22,8 +22,32 @@ import connectorsView from './views/connectors.js?v=20260914-accounts1';
 addEventListener('error',e=>console.error('Space shell error:',e.error||e.message));
 addEventListener('unhandledrejection',e=>console.error('Space unhandled rejection:',e.reason));
 
+/* Responsive navigation can occupy several rows. Measure its bottom for
+   fixed overlays without changing --topbar-h, which sizes the desktop row. */
+function initTopbarInset(){
+  const topbar=document.querySelector('.topbar');
+  if(!topbar)return;
+  let previous=null;
+  const update=()=>{
+    const inset=Math.ceil(topbar.getBoundingClientRect().bottom);
+    if(inset<=0||inset===previous)return;
+    document.documentElement.style.setProperty('--topbar-inset',inset+'px');
+    previous=inset;
+  };
+  update();
+  if(typeof ResizeObserver==='function')new ResizeObserver(update).observe(topbar);
+  else addEventListener('resize',update);
+}
+try{initTopbarInset();}catch(err){console.error('Topbar measurement failed:',err);}
+
 /* Before startRegistry: its first switchTo announces the active view, and a
    listener registered afterwards would miss it on a deep link. */
+addEventListener('space:view',event=>{
+  const link=document.getElementById('wiki-link');
+  if(!link)return;
+  if(event.detail?.id==='wiki')link.setAttribute('aria-current','page');
+  else link.removeAttribute('aria-current');
+});
 try{initLensSwitch();}catch(err){console.error('Lens switch failed to start:',err);}
 
 try{
