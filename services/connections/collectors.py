@@ -5,7 +5,13 @@ A collector spec is data, not code::
 
     {"id", "label", "tool", "args", "list_keys", "id_keys", "title_keys",
      "body_keys", "ts_keys", "url_keys" (optional), "url_template" (optional),
-     "default" (optional bool)}
+     "warn_keys" (optional), "warn_label" (optional), "default" (optional bool)}
+
+``warn_keys`` name paths (a dict of id to message, or a list of messages)
+where a tool reports partial failures inside a *successful* envelope, such
+as the calendar tool's ``errors_by_calendar``; :func:`extract_warnings`
+turns them into lines for ``last_error`` while the items that did arrive
+are still appended.
 
 ``tool`` is always a read-only Composio slug (category ``read`` in
 ``connectors/composio/categories.py``; a test pins that). ``args`` may
@@ -22,6 +28,16 @@ The dedupe key of an event is the element id only (``id_keys``): a
 calendar event that is rescheduled keeps its id and is not surfaced
 again; a recurring instance carries its own id and is. That is by design
 (a stable key, no flood on every reschedule), and a test pins it.
+
+Beside the collectors sits the identity catalog: one read-only tool per
+toolkit that names the account the session is bound to (the swarm's
+account rows carry no email, so the provider is asked). An identity spec
+is ``{"tool", "args", "keys"}``; :func:`identity_spec` hands out a copy
+(``None`` for a toolkit without one) and :func:`extract_identity` reads
+the label out of the answer: the first ``keys`` path holding a non-blank
+string, stripped and capped at :data:`IDENTITY_LABEL_MAX`. Gmail answers
+``{"data": {"emailAddress": ...}}`` and the calendar's ``primary``
+calendar carries the account's email as ``calendar_data.id``.
 """
 
 from __future__ import annotations
@@ -36,6 +52,7 @@ from services.cowork_agent.connectors.composio.service import TOOLKITS
 from services.timestamps import EPOCH as _EPOCH, TS_FORMAT, aware as _aware, iso, parse_ts  # noqa: F401
 
 TITLE_MAX, BODY_MAX = 300, 4000
+IDENTITY_LABEL_MAX = 200
 _PLACEHOLDER_NOW, _PLACEHOLDER_7D = "{now_iso}", "{now_plus_7d_iso}"
 _PLACEHOLDER_YESTERDAY = "{yesterday_date}"
 _DATE_ONLY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -43,6 +60,8 @@ _DIGITS_RE = re.compile(r"\d+")
 _DECIMAL_RE = re.compile(r"\d+\.\d+")       # Slack message ts: "1725000000.000100"
 _EPOCH_MS_THRESHOLD = 1e11        # anything larger is milliseconds, not seconds
 
+# Metadata only (verbose and include_payload false): a full-body answer is large
+# enough for Composio's executor to replace it with a three-item preview.
 _GMAIL_MAP = {
     "list_keys": ["messages", "data.messages", "items"],
     "id_keys": ["messageId", "id", "threadId"],
@@ -56,18 +75,31 @@ _CATALOG: dict[str, list[dict]] = {toolkit: [] for toolkit in TOOLKITS}
 _CATALOG.update({
     "gmail": [
         {"id": "unread", "label": "Unread mail", "default": True, "tool": "GMAIL_FETCH_EMAILS",
-         "args": {"query": "is:unread", "max_results": 20}, **_GMAIL_MAP},
+         "args": {"query": "is:unread", "max_results": 20, "verbose": False, "include_payload": False}, **_GMAIL_MAP},
         {"id": "inbox", "label": "New mail in Inbox (last day)", "tool": "GMAIL_FETCH_EMAILS",
-         "args": {"query": "in:inbox newer_than:1d", "max_results": 20}, **_GMAIL_MAP},
+         "args": {"query": "in:inbox newer_than:1d", "max_results": 20, "verbose": False, "include_payload": False},
+         **_GMAIL_MAP},
     ],
     "googlecalendar": [
+        # One call across every calendar in the account's list: a "primary"-only
+        # read misses shared and secondary calendars, which is where most people
+        # keep the events they expect to see. Composio answers
+        # {events: [{event: {...}, source_calendar_id, source_calendar_summary}],
+        #  summary_view: [{event_id, title, start, end, calendar, display_url}],
+        #  calendars_queried: [...], errors_by_calendar: {calendar_id: message}}
+        # with successful true even when one calendar failed, so the per-calendar
+        # failures are declared as warn_keys and reach last_error. The
+        # summary_view keys are fallbacks for a "minimal" answer.
         {"id": "upcoming", "label": "Upcoming events (next 7 days)", "default": True,
-         "tool": "GOOGLECALENDAR_EVENTS_LIST",
-         "args": {"calendarId": "primary", "timeMin": _PLACEHOLDER_NOW, "timeMax": _PLACEHOLDER_7D,
-                  "singleEvents": True, "orderBy": "startTime", "maxResults": 25},
-         "list_keys": ["items", "data.items", "events", "data.events"],
-         "id_keys": ["id"], "title_keys": ["summary"], "body_keys": ["description", "location"],
-         "ts_keys": ["start.dateTime", "start.date", "updated"], "url_keys": ["htmlLink"]},
+         "tool": "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS",
+         "args": {"time_min": _PLACEHOLDER_NOW, "time_max": _PLACEHOLDER_7D, "single_events": True,
+                  "response_detail": "full", "max_results_per_calendar": 25},
+         "list_keys": ["events", "data.events", "summary_view", "data.summary_view"],
+         "id_keys": ["event.id", "event_id"], "title_keys": ["event.summary", "title"],
+         "body_keys": ["event.description", "event.location", "source_calendar_summary", "calendar"],
+         "ts_keys": ["event.start.dateTime", "event.start.date", "event.updated", "start"],
+         "url_keys": ["event.htmlLink", "event.display_url", "display_url"],
+         "warn_keys": ["errors_by_calendar", "data.errors_by_calendar"], "warn_label": "calendar"},
     ],
     "notion": [
         {"id": "recent_pages", "label": "Recently edited pages", "default": True,
@@ -110,6 +142,17 @@ _CATALOG.update({
     ],
 })
 
+# The identity catalog: which read-only tool names the connected account.
+# Gmail: {emailAddress, historyId, messagesTotal, threadsTotal}. Calendar: the
+# "primary" calendar's id is the account's email; its summary is the fallback.
+_IDENTITY: dict[str, dict] = {
+    "gmail": {"tool": "GMAIL_GET_PROFILE", "args": {"user_id": "me"},
+              "keys": ["emailAddress", "data.emailAddress"]},
+    "googlecalendar": {"tool": "GOOGLECALENDAR_GET_CALENDAR", "args": {"calendar_id": "primary"},
+                       "keys": ["calendar_data.id", "data.calendar_data.id",
+                                "calendar_data.summary", "data.calendar_data.summary"]},
+}
+
 
 # ── Catalog access ───────────────────────────────────────────────────────────
 
@@ -126,6 +169,26 @@ def collector(toolkit: str, collector_id: str) -> Optional[dict]:
 
 def default_ids(toolkit: str) -> list[str]:
     return [spec["id"] for spec in _CATALOG.get(toolkit, []) if spec.get("default")]
+
+
+def identity_spec(toolkit: str) -> Optional[dict]:
+    """A copy of the identity spec for ``toolkit`` (``{"tool", "args",
+    "keys"}``), or ``None`` for a toolkit without an account lookup."""
+    spec = _IDENTITY.get(toolkit)
+    return copy.deepcopy(spec) if spec is not None else None
+
+
+def extract_identity(spec: dict, payload) -> Optional[str]:
+    """The account label in an identity tool's answer: the first ``keys``
+    path whose value is a non-blank string, stripped and capped at
+    :data:`IDENTITY_LABEL_MAX`; ``None`` when no path holds one."""
+    if not isinstance(spec, dict):
+        return None
+    for key in spec.get("keys") or []:
+        value = lookup(payload, key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:IDENTITY_LABEL_MAX]
+    return None
 
 
 # ── Time ─────────────────────────────────────────────────────────────────────
@@ -267,6 +330,31 @@ def _typed_title(element: dict) -> Optional[str]:
             if text.strip():
                 return text
     return None
+
+
+def extract_warnings(spec: dict, payload) -> list[str]:
+    """Partial failures a tool reports inside a successful envelope, read from
+    the spec's ``warn_keys`` (the first path holding a non-empty dict or
+    list wins). One short line per run: how many sources failed and the
+    first messages, so ``last_error`` explains a poll that "succeeded" with
+    fewer items than expected. An absent or empty container is no warning."""
+    if not isinstance(payload, dict):
+        return []
+    label = str(spec.get("warn_label") or "source")
+    for path in spec.get("warn_keys") or []:
+        found = lookup(payload, path)
+        if isinstance(found, dict) and found:
+            entries = [f"{_one_line(str(k))[:60]}: {_one_line(str(v))[:120]}" for k, v in list(found.items())[:3]]
+            count = len(found)
+        elif isinstance(found, list) and found:
+            entries = [_one_line(str(v))[:120] for v in found[:3]]
+            count = len(found)
+        else:
+            continue
+        more = count - len(entries)
+        tail = f"; and {more} more" if more > 0 else ""
+        return [f"{count} {label}(s) failed: " + "; ".join(entries) + tail]
+    return []
 
 
 def extract_items(spec: dict, payload, *, toolkit: str, now: datetime) -> list[dict]:

@@ -27,6 +27,17 @@ anything else runs through Composio's executor tool (see
 exactly once per poll; one that dies mid-poll (a collector's ``tools/call``
 answers HTTP 404) ends the collector loop, the collectors after it are
 recorded as not attempted, and the next poll's handshake replaces it.
+
+The account a toolkit's session is bound to is resolved on the same
+session, before the collectors, whenever the cached label is stale
+(:func:`account_is_fresh`: older than :data:`ACCOUNT_TTL_S`, or resolved
+under a different pinned account id) and remembered in ``accounts.json``
+(:func:`store.remember_account`). The lookup is best-effort: a failure is
+logged, never joins ``last_error`` and never blocks the collectors.
+:func:`refresh_account` is the route's "resolve it now": the same
+identity, scope and session steps as a poll (:func:`_open_session_for`)
+on a session of its own, answered in the route's shape and throttled to
+one provider call per :data:`ACCOUNT_MIN_REFRESH_S`.
 """
 
 from __future__ import annotations
@@ -40,7 +51,7 @@ from typing import Optional
 from services.cowork_agent.connectors.composio import service as composio_service
 from services.cowork_agent.connectors.composio import state, space_scope
 from services.periodic import run_forever
-from services.timestamps import parse_ts
+from services.timestamps import aware, parse_ts
 
 from . import collectors, mcp_client, store
 
@@ -63,6 +74,12 @@ LIST_TIMEOUT_S = 30.0
 #: A forced poll ("poll now") waits this long for the loop to release the lock
 #: before answering "busy".
 FORCE_WAIT_S = 25.0
+#: A cached account label is looked up again after this long (a poll does it
+#: on its own session), and :func:`refresh_account` answers from the cache
+#: within :data:`ACCOUNT_MIN_REFRESH_S` of the last check (Google's quota is
+#: per minute).
+ACCOUNT_TTL_S = 86400
+ACCOUNT_MIN_REFRESH_S = 60
 
 NOT_SIGNED_IN = "not signed in to XO (no account id)"
 NO_TOOLKITS = "no toolkits are turned on in this workspace"
@@ -172,6 +189,34 @@ async def resolve_user_id() -> Optional[str]:
         return None
 
 
+_NO_ACTIVE_CONNECTION = "No active connection found for toolkit"
+_SESSION_RESTRICTION = "[Session Restriction]"
+_RATE_LIMIT_MARKS = ("Quota exceeded", "rateLimitExceeded", "userRateLimitExceeded", "Rate limit", "429")
+
+
+def humanize_error(toolkit: str, text: str) -> str:
+    """Composio's tool-router texts are written for a model ("call
+    COMPOSIO_MANAGE_CONNECTIONS ..."); the ones a poll meets most are
+    reworded for ``last_error``, the card and the Inbox. Anything else
+    passes through unchanged."""
+    if _NO_ACTIVE_CONNECTION in text:
+        return (f"{toolkit} is no longer connected on Composio (the sign-in expired or was revoked): "
+                f"reconnect it from the Connectors tab")
+    if _SESSION_RESTRICTION in text:
+        return f"{toolkit} is turned off for this workspace's Composio session: turn it on from the Connectors tab"
+    if any(mark in text for mark in _RATE_LIMIT_MARKS):
+        return "the provider's rate limit was hit (queries per minute); the next poll retries"
+    return text
+
+
+def _error_text(exc: BaseException) -> str:
+    """One line for a failed call: the timeout spelled out, otherwise the
+    message (capped) or the exception's type."""
+    if isinstance(exc, asyncio.TimeoutError):
+        return f"timed out after {CALL_TIMEOUT_S + _GRACE_S:.0f}s"
+    return str(exc)[:300] or type(exc).__name__
+
+
 def _fail(toolkit: str, message: str, now_text: str) -> dict:
     """A poll that could not run its collectors: stamp ``last_poll_at`` and
     the error, leave ``last_ok_at`` alone, never touch ``events.jsonl``."""
@@ -182,10 +227,13 @@ def _fail(toolkit: str, message: str, now_text: str) -> dict:
 
 
 async def _run_collector(toolkit: str, spec: dict, session: mcp_client.McpSession, state_doc: dict,
-                         now: datetime, tool_names: list[str]) -> int:
+                         now: datetime, tool_names: list[str]) -> tuple[int, list[str]]:
     """One collector over the poll's open ``session``: call (directly, or
     through the session's executor when the slug is not listed), unwrap,
-    map, dedupe, append, remember. Returns the number of events appended.
+    map, dedupe, append, remember. Returns the number of events appended
+    and the warnings the tool reported inside its successful envelope (the
+    spec's ``warn_keys``, for example one calendar out of three failing);
+    those join ``last_error`` while the events that did arrive are kept.
     Raises on any failure; Composio's envelope with ``successful`` false
     (``isError`` false, so the session raised nothing) is an
     :class:`mcp_client.McpError` with stage ``execute`` and no status."""
@@ -197,9 +245,13 @@ async def _run_collector(toolkit: str, spec: dict, session: mcp_client.McpSessio
     payload = mcp_client.tool_result_json(result)
     if isinstance(payload, dict) and payload.get("successful") is False:
         # Composio's envelope: isError false with successful false is a silent failure.
-        raise mcp_client.McpError(str(payload.get("error") or "tool reported failure")[:store.ERROR_MAX],
+        raise mcp_client.McpError((mcp_client.error_text(payload.get("error")) or "tool reported failure")[:store.ERROR_MAX],
                                   stage="execute")
     items = collectors.extract_items(spec, payload, toolkit=toolkit, now=now)
+    warnings = collectors.extract_warnings(spec, payload)
+    if isinstance(payload, dict) and payload.get("truncated"):
+        warnings.append("Composio returned only a preview of a large answer; the newest items were read, "
+                        "the rest were not")
     seen = set(state_doc["cursors"].get(spec["id"], {}).get("seen", []))
     fresh: list[dict] = []
     for item in items:
@@ -210,7 +262,9 @@ async def _run_collector(toolkit: str, spec: dict, session: mcp_client.McpSessio
     appended = store.append_events(toolkit, fresh) if fresh else 0
     store.remember_seen(state_doc, spec["id"], [item["key"] for item in fresh])
     logger.debug("connections poller: %s/%s: %d item(s), %d new", toolkit, spec["id"], len(items), appended)
-    return appended
+    for warning in warnings:
+        logger.warning("connections poller: %s/%s: %s", toolkit, spec["id"], warning)
+    return appended, warnings
 
 
 def _session_gone(exc: BaseException) -> bool:
@@ -271,6 +325,145 @@ async def _list_tools_healing(user_id: str, entry: dict) -> tuple[mcp_client.Mcp
     return await _open_and_list(entry)
 
 
+class _SessionUnavailable(Exception):
+    """Why no session could be opened for a toolkit; its text is what a poll
+    records as ``last_error`` and what :func:`refresh_account` answers."""
+
+
+async def _open_session_for(toolkit: str, user_id) -> tuple[mcp_client.McpSession, list[str]]:
+    """The steps a poll and an account refresh share: resolve the identity
+    (unless ``user_id`` is given), check the toolkit is turned on here, mint
+    the entry, open the session with :func:`_list_tools_healing`. Raises
+    :class:`_SessionUnavailable` with the recorded text at each step; the
+    session comes back open and the caller closes it."""
+    if user_id is _UNRESOLVED:
+        user_id = await resolve_user_id()
+    if not user_id:
+        raise _SessionUnavailable(NOT_SIGNED_IN)
+    try:
+        enabled_here = toolkit in space_scope.enabled_toolkits()
+    except Exception:
+        logger.warning("connections poller: workspace scope unreadable", exc_info=True)
+        enabled_here = False
+    if not enabled_here:
+        raise _SessionUnavailable(f"{toolkit} is not turned on in this workspace")
+    try:
+        entry = await asyncio.to_thread(composio_service.build_mcp_server_entry, user_id)
+    except composio_service.NoToolkitsEnabled:
+        raise _SessionUnavailable(NO_TOOLKITS)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise _SessionUnavailable(f"session unavailable: {str(exc)[:250]}")
+    try:
+        return await _list_tools_healing(user_id, entry)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise _SessionUnavailable(f"tools/list failed: {str(exc)[:220] or type(exc).__name__}")
+
+
+# ── The connected account ────────────────────────────────────────────────────
+
+
+def pinned_account_id(toolkit: str) -> Optional[str]:
+    """The first connected account id this workspace pins for ``toolkit``
+    (the one the session is bound to), or ``None`` when nothing is pinned
+    or the scope cannot be read."""
+    try:
+        ids = space_scope.load().get(toolkit, {}).get("connected_account_ids") or []
+    except Exception as exc:
+        logger.debug("connections poller: workspace scope unreadable for %s (%s)", toolkit, type(exc).__name__)
+        return None
+    return ids[0] if ids and isinstance(ids[0], str) else None
+
+
+def account_is_fresh(toolkit: str, now: datetime) -> bool:
+    """Cached, resolved under the account pinned right now (nothing pinned
+    then and now counts as the same), and checked within
+    :data:`ACCOUNT_TTL_S` of ``now``."""
+    cached = store.read_accounts().get(toolkit)
+    if cached is None or cached.get("connected_account_id") != pinned_account_id(toolkit):
+        return False
+    checked = parse_ts(cached.get("checked_at"))
+    return checked is not None and 0 <= (aware(now) - checked).total_seconds() < ACCOUNT_TTL_S
+
+
+async def _lookup_account(toolkit: str, spec: dict, session: mcp_client.McpSession, tool_names: list[str],
+                          now: datetime) -> str:
+    """One identity call over ``session`` (directly or through the executor,
+    like a collector), the label read out of the envelope and remembered
+    under the pinned account id. Raises on any failure, including an
+    answer without a label."""
+    result = await asyncio.wait_for(
+        session.execute_tool(spec["tool"], dict(spec["args"]), tool_names=tool_names),
+        CALL_TIMEOUT_S + _GRACE_S,
+    )
+    payload = mcp_client.tool_result_json(result)
+    if isinstance(payload, dict) and payload.get("successful") is False:
+        raise mcp_client.McpError((mcp_client.error_text(payload.get("error")) or "tool reported failure")[:store.ERROR_MAX],
+                                  stage="execute")
+    label = collectors.extract_identity(spec, payload)
+    if label is None:
+        raise mcp_client.McpError(f"{spec['tool']} answered without an account label", stage="execute")
+    store.remember_account(toolkit, label, pinned_account_id(toolkit), now=now)
+    return label
+
+
+async def resolve_account(toolkit: str, session: mcp_client.McpSession, tool_names: list[str],
+                          now: datetime) -> Optional[str]:
+    """Resolve and remember the account label on the poll's open session.
+    ``None`` without a call for a toolkit with no identity spec; ``None``
+    and a WARN on any failure (never raises; cancellation propagates)."""
+    spec = collectors.identity_spec(toolkit)
+    if spec is None:
+        return None
+    try:
+        return await _lookup_account(toolkit, spec, session, tool_names, now)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("connections poller: %s: account lookup failed: %s", toolkit,
+                       humanize_error(toolkit, _error_text(exc)))
+        return None
+
+
+async def refresh_account(toolkit: str, *, force: bool = False) -> dict:
+    """Resolve the account label now, on a session of its own, and answer
+    ``{"toolkit", "account_label", "account_checked_at", "error",
+    "cached"}``. A toolkit without an identity spec answers with the error
+    "no account lookup for <toolkit> yet"; a check within
+    :data:`ACCOUNT_MIN_REFRESH_S` answers the cached values with ``cached``
+    true unless ``force``; every failure keeps the cached label and sets
+    ``error`` (reworded by :func:`humanize_error`). Never raises for a
+    provider or session failure; an unknown toolkit is the service's 404."""
+    cached = store.read_accounts().get(toolkit) or {}
+    answer = {"toolkit": toolkit, "account_label": cached.get("label"),
+              "account_checked_at": cached.get("checked_at"), "error": None, "cached": False}
+    spec = collectors.identity_spec(toolkit)
+    if spec is None:
+        return {**answer, "error": f"no account lookup for {toolkit} yet"}
+    now = datetime.now(timezone.utc)
+    checked = parse_ts(cached.get("checked_at"))
+    if not force and checked is not None and 0 <= (now - checked).total_seconds() < ACCOUNT_MIN_REFRESH_S:
+        return {**answer, "cached": True}
+    try:
+        session, tool_names = await _open_session_for(toolkit, _UNRESOLVED)
+    except _SessionUnavailable as exc:
+        return {**answer, "error": humanize_error(toolkit, str(exc))}
+    try:
+        label = await _lookup_account(toolkit, spec, session, tool_names, now)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        text = humanize_error(toolkit, _error_text(exc))
+        logger.warning("connections poller: %s: account lookup failed: %s", toolkit, text)
+        return {**answer, "error": text}
+    finally:
+        await session.close()
+    return {**answer, "account_label": label, "account_checked_at": collectors.iso(now)}
+
+
 # ── One connection ───────────────────────────────────────────────────────────
 
 
@@ -306,56 +499,40 @@ async def poll_connection(toolkit: str, *, force: bool = False, user_id=_UNRESOL
 
 async def _poll_locked(toolkit: str, user_id) -> dict:
     """The body of :func:`poll_connection`, run with the toolkit's lock held.
-    Collectors run in config order over the one session; a collector whose
-    ``tools/call`` finds the session gone (:func:`_session_lost`) ends the
-    loop, and the collectors after it are recorded as :data:`SESSION_LOST`."""
+    Once the session is open and listed, a stale account label is resolved
+    first (:func:`resolve_account`, best-effort). Collectors then run in
+    config order over the one session; a collector whose ``tools/call``
+    finds the session gone (:func:`_session_lost`) ends the loop, and the
+    collectors after it are recorded as :data:`SESSION_LOST`."""
     config = _read_config(toolkit)      # re-read: a DELETE meanwhile must not be undone
     if config is None:
         return _outcome(toolkit, skipped="not_configured")
     now = datetime.now(timezone.utc)
     now_text = collectors.iso(now)
-    if user_id is _UNRESOLVED:
-        user_id = await resolve_user_id()
-    if not user_id:
-        return _fail(toolkit, NOT_SIGNED_IN, now_text)
     try:
-        enabled_here = toolkit in space_scope.enabled_toolkits()
-    except Exception:
-        logger.warning("connections poller: workspace scope unreadable", exc_info=True)
-        enabled_here = False
-    if not enabled_here:
-        return _fail(toolkit, f"{toolkit} is not turned on in this workspace", now_text)
-    try:
-        entry = await asyncio.to_thread(composio_service.build_mcp_server_entry, user_id)
-    except composio_service.NoToolkitsEnabled:
-        return _fail(toolkit, NO_TOOLKITS, now_text)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        return _fail(toolkit, f"session unavailable: {str(exc)[:250]}", now_text)
-
-    try:
-        session, tool_names = await _list_tools_healing(user_id, entry)
-    except asyncio.CancelledError:
-        raise
-    except Exception as exc:
-        return _fail(toolkit, f"tools/list failed: {str(exc)[:220] or type(exc).__name__}", now_text)
+        session, tool_names = await _open_session_for(toolkit, user_id)
+    except _SessionUnavailable as exc:
+        return _fail(toolkit, str(exc), now_text)
 
     state_doc = store.read_state(toolkit)
     errors: list[str] = []
     added = 0
     try:
+        if not account_is_fresh(toolkit, now):
+            await resolve_account(toolkit, session, tool_names, now)
         specs = [(cid, collectors.collector(toolkit, cid)) for cid in config["collectors"]]
         specs = [(cid, spec) for cid, spec in specs if spec is not None]     # unknown ids are skipped
         for index, (collector_id, spec) in enumerate(specs):
             try:
-                added += await _run_collector(toolkit, spec, session, state_doc, now, tool_names)
+                appended, warnings = await _run_collector(toolkit, spec, session, state_doc, now, tool_names)
+                added += appended
+                errors.extend(f"{collector_id}: {warning}" for warning in warnings)
             except asyncio.TimeoutError:
                 errors.append(f"{collector_id}: timed out after {CALL_TIMEOUT_S + _GRACE_S:.0f}s")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                text = str(exc)[:200] or type(exc).__name__
+                text = humanize_error(toolkit, str(exc)[:300] or type(exc).__name__)[:200]
                 errors.append(f"{collector_id}: {text}")
                 logger.warning("connections poller: %s/%s failed: %s", toolkit, collector_id, text)
                 if _session_lost(exc):

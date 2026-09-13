@@ -301,6 +301,19 @@ class ToolResultJsonTests(unittest.TestCase):
         self.assertEqual(mcp_client.tool_result_json({"content": [{"type": "text", "text": "\"s\""}]}), "s")
 
 
+class ErrorTextTests(unittest.TestCase):
+    def test_shapes(self) -> None:
+        et = mcp_client.error_text
+        self.assertEqual(et(None), "")
+        self.assertEqual(et("plain text"), "plain text")
+        self.assertEqual(et({"message": "boom"}), "boom")
+        self.assertEqual(et({"error": {"code": 403, "message": "Quota exceeded"}}), "Quota exceeded")
+        self.assertEqual(et('{"error": {"message": "nested in a string"}}'), "nested in a string")
+        self.assertEqual(et("{not json"), "{not json")
+        self.assertEqual(et({"code": 500}), '{"code": 500}')
+        self.assertEqual(et(42), "42")
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -374,6 +387,34 @@ class ExecuteToolTests(_Base):
         with self.assertRaises(McpError) as raised:
             run(mcp_client.execute_tool(ENTRY, "NOTION_SEARCH_NOTION_PAGE", {}, tool_names=[self.EXECUTOR]))
         self.assertIn("Session Restriction", str(raised.exception))
+
+    def test_executor_per_tool_error_object_reads_as_its_message(self) -> None:
+        """Google answers through Composio as ``{"error": {"code": 403,
+        "message": ...}}``; the message, not the dict's repr, is the error."""
+        answer = router_call([{"tool_slug": "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", "index": 0,
+                               "error": {"error": {"code": 403, "message": "Quota exceeded for quota metric 'Queries'"}}}],
+                             is_error=True)
+        self.use(RouterUpstream(tools=[self.EXECUTOR], call=answer))
+        with self.assertRaises(McpError) as raised:
+            run(mcp_client.execute_tool(ENTRY, "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS", {}, tool_names=[self.EXECUTOR]))
+        self.assertEqual(str(raised.exception), "Quota exceeded for quota metric 'Queries'")
+
+    def test_executor_preview_is_used_and_flagged_when_data_is_absent(self) -> None:
+        """A large answer comes back as ``data_preview`` with the full payload
+        parked remotely: the preview is the data, and the envelope says so."""
+        answer = router_call([{"tool_slug": "GMAIL_FETCH_EMAILS", "index": 0,
+                               "response": {"successful": True, "data_preview": {"messages": [{"messageId": "m1"}]}}}])
+        self.use(RouterUpstream(tools=[self.EXECUTOR], call=answer))
+        result = run(mcp_client.execute_tool(ENTRY, "GMAIL_FETCH_EMAILS", {}, tool_names=[self.EXECUTOR]))
+        payload = mcp_client.tool_result_json(result)
+        self.assertEqual(payload["data"], {"messages": [{"messageId": "m1"}]})
+        self.assertIs(payload["truncated"], True)
+        plain = router_call([{"tool_slug": "GMAIL_FETCH_EMAILS", "index": 0,
+                              "response": {"successful": True, "data": {"messages": []}}}])
+        with patch.object(mcp_client, "_TRANSPORT",
+                          httpx.MockTransport(RouterUpstream(tools=[self.EXECUTOR], call=plain).handler)):
+            result = run(mcp_client.execute_tool(ENTRY, "GMAIL_FETCH_EMAILS", {}, tool_names=[self.EXECUTOR]))
+        self.assertNotIn("truncated", mcp_client.tool_result_json(result))
 
     def test_executor_without_a_result_or_with_a_failed_response(self) -> None:
         empty = router_call([])

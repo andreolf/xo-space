@@ -42,16 +42,23 @@ class CatalogTests(unittest.TestCase):
                     # a url source is always declared, even when a toolkit has none to offer
                     self.assertTrue("url_keys" in spec or "url_template" in spec)
                     self.assertIsInstance(spec["args"], dict)
+            identity = collectors.identity_spec(toolkit)
+            if identity is not None:
+                with self.subTest(toolkit=toolkit, identity=identity["tool"]):
+                    self.assertEqual(set(identity), {"tool", "args", "keys"})
+                    self.assertEqual(categories.classify(toolkit, identity["tool"]), "read")
+                    self.assertIsInstance(identity["args"], dict)
+                    self.assertTrue(identity["keys"])
 
     def test_catalog_contents(self) -> None:
         self.assertEqual([s["id"] for s in collectors.catalog("gmail")], ["unread", "inbox"])
         self.assertEqual(collectors.default_ids("gmail"), ["unread"])
         self.assertEqual(gmail_spec("unread")["tool"], "GMAIL_FETCH_EMAILS")
-        self.assertEqual(gmail_spec("unread")["args"], {"query": "is:unread", "max_results": 20})
-        self.assertEqual(gmail_spec("inbox")["args"], {"query": "in:inbox newer_than:1d", "max_results": 20})
+        self.assertEqual(gmail_spec("unread")["args"], {"query": "is:unread", "max_results": 20, "verbose": False, "include_payload": False})
+        self.assertEqual(gmail_spec("inbox")["args"], {"query": "in:inbox newer_than:1d", "max_results": 20, "verbose": False, "include_payload": False})
         self.assertEqual(gmail_spec("inbox")["label"], "New mail in Inbox (last day)")
         self.assertEqual([s["id"] for s in collectors.catalog("googlecalendar")], ["upcoming"])
-        self.assertEqual(collectors.collector("googlecalendar", "upcoming")["tool"], "GOOGLECALENDAR_EVENTS_LIST")
+        self.assertEqual(collectors.collector("googlecalendar", "upcoming")["tool"], "GOOGLECALENDAR_EVENTS_LIST_ALL_CALENDARS")
         self.assertEqual(collectors.default_ids("googlecalendar"), ["upcoming"])
         notion = collectors.collector("notion", "recent_pages")
         self.assertEqual(notion["tool"], "NOTION_SEARCH_NOTION_PAGE")
@@ -82,16 +89,82 @@ class CatalogTests(unittest.TestCase):
         self.assertNotIn("x", gmail_spec()["id_keys"])
 
 
+class IdentityTests(unittest.TestCase):
+    """The identity catalog and the label read out of each tool's answer,
+    in the shapes the live Composio session answers with."""
+
+    GMAIL = {"successful": True, "error": None,
+             "data": {"emailAddress": "ana@example.com", "historyId": "12345", "messagesTotal": 10,
+                      "threadsTotal": 8, "display_url": "https://mail.google.com/"}}
+    CALENDAR = {"successful": True, "error": None,
+                "data": {"calendar_data": {"id": "ana@example.com", "summary": "ana@example.com",
+                                           "timeZone": "Europe/Lisbon"},
+                         "display_url": "https://calendar.google.com/"}}
+
+    def test_spec_lookups(self) -> None:
+        gmail = collectors.identity_spec("gmail")
+        self.assertEqual(gmail, {"tool": "GMAIL_GET_PROFILE", "args": {"user_id": "me"},
+                                 "keys": ["emailAddress", "data.emailAddress"]})
+        calendar = collectors.identity_spec("googlecalendar")
+        self.assertEqual((calendar["tool"], calendar["args"]), ("GOOGLECALENDAR_GET_CALENDAR", {"calendar_id": "primary"}))
+        self.assertEqual(calendar["keys"][:2], ["calendar_data.id", "data.calendar_data.id"])
+        for toolkit in ("notion", "slack", "telegram", "figma", "googledocs", "not_a_toolkit"):
+            self.assertIsNone(collectors.identity_spec(toolkit), toolkit)
+        gmail["args"]["user_id"] = "changed"
+        gmail["keys"].append("x")
+        self.assertEqual(collectors.identity_spec("gmail")["args"], {"user_id": "me"}, "a copy every time")
+        self.assertNotIn("x", collectors.identity_spec("gmail")["keys"])
+
+    def test_extracts_the_email_from_both_real_shapes(self) -> None:
+        self.assertEqual(collectors.extract_identity(collectors.identity_spec("gmail"), self.GMAIL), "ana@example.com")
+        self.assertEqual(collectors.extract_identity(collectors.identity_spec("googlecalendar"), self.CALENDAR),
+                         "ana@example.com")
+        # the unwrapped payloads (a plain MCP server answering without the envelope)
+        self.assertEqual(collectors.extract_identity(collectors.identity_spec("gmail"), self.GMAIL["data"]),
+                         "ana@example.com")
+        self.assertEqual(collectors.extract_identity(collectors.identity_spec("googlecalendar"), self.CALENDAR["data"]),
+                         "ana@example.com")
+        # a calendar whose id is not an address falls through to its summary
+        payload = {"data": {"calendar_data": {"id": "", "summary": "  Ana Lima  "}}}
+        self.assertEqual(collectors.extract_identity(collectors.identity_spec("googlecalendar"), payload), "Ana Lima")
+
+    def test_missing_blank_or_non_string_values_read_as_none(self) -> None:
+        spec = collectors.identity_spec("gmail")
+        for payload in ({"data": {"emailAddress": ""}}, {"data": {"emailAddress": "   "}},
+                        {"data": {"emailAddress": 7}}, {"data": {"emailAddress": ["a@b"]}},
+                        {"data": {}}, {"successful": False, "data": None, "error": "nope"}, {}, None, "junk", []):
+            with self.subTest(payload=payload):
+                self.assertIsNone(collectors.extract_identity(spec, payload))
+        self.assertIsNone(collectors.extract_identity(None, self.GMAIL), "no spec, no label")
+        self.assertIsNone(collectors.extract_identity({"keys": []}, self.GMAIL))
+
+    def test_label_is_stripped_and_capped(self) -> None:
+        spec = collectors.identity_spec("gmail")
+        self.assertEqual(collectors.extract_identity(spec, {"emailAddress": "  a@b.c \n"}), "a@b.c")
+        long = collectors.extract_identity(spec, {"emailAddress": "x" * 500})
+        self.assertEqual(len(long), collectors.IDENTITY_LABEL_MAX)
+        self.assertEqual(collectors.IDENTITY_LABEL_MAX, 200)
+
+
+class GmailArgsTests(unittest.TestCase):
+    def test_gmail_asks_for_metadata_only(self) -> None:
+        for cid in ("unread", "inbox"):
+            args = collectors.collector("gmail", cid)["args"]
+            self.assertIs(args["verbose"], False, cid)
+            self.assertIs(args["include_payload"], False, cid)
+
+
 class RenderArgsTests(unittest.TestCase):
     def test_calendar_placeholders(self) -> None:
         spec = collectors.collector("googlecalendar", "upcoming")
         before = copy.deepcopy(spec)
         args = collectors.render_args(spec, NOW)
-        self.assertEqual(args["timeMin"], NOW_ISO)
-        self.assertEqual(args["timeMax"], "2026-09-18T12:00:00Z")
-        self.assertIs(args["singleEvents"], True)
-        self.assertEqual(args["maxResults"], 25)
-        self.assertEqual(args["calendarId"], "primary")
+        self.assertEqual(args["time_min"], NOW_ISO)
+        self.assertEqual(args["time_max"], "2026-09-18T12:00:00Z")
+        self.assertIs(args["single_events"], True)
+        self.assertEqual(args["max_results_per_calendar"], 25)
+        self.assertEqual(args["response_detail"], "full", "the events array, not only the summary view")
+        self.assertNotIn("calendarId", args, "every calendar in the account's list, not primary alone")
         self.assertEqual(spec, before, "rendering never mutates the spec")
 
     def test_naive_now_is_utc_and_offsets_convert(self) -> None:
@@ -227,18 +300,27 @@ class ExtractGmailTests(unittest.TestCase):
 
 
 class ExtractCalendarTests(unittest.TestCase):
+    """The all-calendars tool wraps each event as ``{event, source_calendar_id,
+    source_calendar_summary}``; the mapping reads through ``event.`` and falls
+    back to the calendar's name for the body."""
+
     def spec(self) -> dict:
         return collectors.collector("googlecalendar", "upcoming")
 
-    def test_events_under_data_items_with_html_link(self) -> None:
-        payload = {"successful": True, "data": {"items": [
-            {"id": "ev1", "summary": "Standup", "description": "daily", "location": "Room 1",
-             "start": {"dateTime": "2026-09-12T09:00:00+02:00"}, "htmlLink": "https://calendar.google.com/event?eid=1",
-             "updated": "2026-09-01T00:00:00Z"},
-            {"id": "ev2", "summary": "Offsite", "location": "Lisbon", "start": {"date": "2026-09-13"},
-             "htmlLink": "http://calendar.google.com/event?eid=2"},
-            {"id": "ev3", "start": {}, "updated": "2026-09-10T00:00:00Z", "htmlLink": "ftp://nope"},
-        ]}}
+    @staticmethod
+    def wrap(event: dict, calendar: str = "Team") -> dict:
+        return {"event": event, "source_calendar_id": calendar.lower() + "@group.calendar.google.com",
+                "source_calendar_summary": calendar}
+
+    def test_events_across_calendars_with_html_link(self) -> None:
+        payload = {"successful": True, "data": {"events": [
+            self.wrap({"id": "ev1", "summary": "Standup", "description": "daily", "location": "Room 1",
+                       "start": {"dateTime": "2026-09-12T09:00:00+02:00"},
+                       "htmlLink": "https://calendar.google.com/event?eid=1", "updated": "2026-09-01T00:00:00Z"}),
+            self.wrap({"id": "ev2", "summary": "Offsite", "location": "Lisbon", "start": {"date": "2026-09-13"},
+                       "htmlLink": "http://calendar.google.com/event?eid=2"}, calendar="Personal"),
+            self.wrap({"id": "ev3", "start": {}, "updated": "2026-09-10T00:00:00Z", "htmlLink": "ftp://nope"}),
+        ], "summary_view": [], "calendars_queried": [{"id": "primary"}], "errors_by_calendar": {}}}
         items = collectors.extract_items(self.spec(), payload, toolkit="googlecalendar", now=NOW)
         self.assertEqual([it["key"] for it in items], ["ev2", "ev1", "ev3"])
         ev1, ev2, ev3 = items[1], items[0], items[2]
@@ -246,24 +328,76 @@ class ExtractCalendarTests(unittest.TestCase):
                          ("Standup", "daily", "2026-09-12T07:00:00Z", "https://calendar.google.com/event?eid=1",
                           "upcoming", "googlecalendar"))
         self.assertEqual((ev2["body"], ev2["ts"], ev2["url"]), ("Lisbon", "2026-09-13T00:00:00Z", "http://calendar.google.com/event?eid=2"))
-        self.assertEqual((ev3["title"], ev3["ts"], ev3["url"]), ("Upcoming events (next 7 days): ev3", "2026-09-10T00:00:00Z", None))
+        # no summary, description or location: the calendar's name is the body and the label the title
+        self.assertEqual((ev3["title"], ev3["body"], ev3["ts"], ev3["url"]),
+                         ("Upcoming events (next 7 days): ev3", "Team", "2026-09-10T00:00:00Z", None))
+
+    def test_a_primary_only_shape_maps_nothing(self) -> None:
+        """The old single-calendar answer (``data.items``) is not read any
+        more: pinned so a silent regression to it cannot look like success."""
+        payload = {"successful": True, "data": {"items": [{"id": "x", "summary": "S"}]}}
+        self.assertEqual(collectors.extract_items(self.spec(), payload, toolkit="googlecalendar", now=NOW), [])
+
+    def test_summary_view_is_the_fallback_for_a_minimal_answer(self) -> None:
+        payload = {"successful": True, "data": {"summary_view": [
+            {"event_id": "sv1", "title": "Review", "start": "2026-09-12T09:00:00Z", "end": "2026-09-12T10:00:00Z",
+             "calendar": "Team", "is_all_day": False, "display_url": "https://calendar.google.com/event?eid=sv1"}]}}
+        items = collectors.extract_items(self.spec(), payload, toolkit="googlecalendar", now=NOW)
+        self.assertEqual([(it["key"], it["title"], it["body"], it["ts"], it["url"]) for it in items],
+                         [("sv1", "Review", "Team", "2026-09-12T09:00:00Z", "https://calendar.google.com/event?eid=sv1")])
 
     def test_top_level_events_list_key(self) -> None:
-        items = collectors.extract_items(self.spec(), {"events": [{"id": "x", "summary": "S"}]},
+        items = collectors.extract_items(self.spec(), {"events": [self.wrap({"id": "x", "summary": "S"})]},
                                          toolkit="googlecalendar", now=NOW)
         self.assertEqual([it["key"] for it in items], ["x"])
 
     def test_dedupe_key_is_the_id_only_so_a_reschedule_is_not_surfaced_again(self) -> None:
         # Pinned on purpose: a rescheduled event keeps its id and therefore its key; the
         # poller's seen set drops it. A recurring instance carries its own id and is new.
-        before = [{"id": "abc", "summary": "Sync", "start": {"dateTime": "2026-09-12T09:00:00Z"}}]
-        after = [{"id": "abc", "summary": "Sync", "start": {"dateTime": "2026-09-14T09:00:00Z"}},
-                 {"id": "abc_20260915T090000Z", "summary": "Sync", "start": {"dateTime": "2026-09-15T09:00:00Z"}}]
+        before = {"events": [self.wrap({"id": "abc", "summary": "Sync", "start": {"dateTime": "2026-09-12T09:00:00Z"}})]}
+        after = {"events": [self.wrap({"id": "abc", "summary": "Sync", "start": {"dateTime": "2026-09-14T09:00:00Z"}}),
+                            self.wrap({"id": "abc_20260915T090000Z", "summary": "Sync",
+                                       "start": {"dateTime": "2026-09-15T09:00:00Z"}})]}
         first = collectors.extract_items(self.spec(), before, toolkit="googlecalendar", now=NOW)
         second = collectors.extract_items(self.spec(), after, toolkit="googlecalendar", now=NOW)
         self.assertEqual([it["key"] for it in first], ["abc"])
         self.assertEqual(sorted(it["key"] for it in second), ["abc", "abc_20260915T090000Z"])
         self.assertNotEqual(first[0]["ts"], [it for it in second if it["key"] == "abc"][0]["ts"])
+
+
+class ExtractWarningsTests(unittest.TestCase):
+    """``warn_keys``: partial failures inside a successful envelope become one
+    line for ``last_error``; nothing declared, or an empty container, is
+    no warning."""
+
+    def test_errors_by_calendar_become_one_line(self) -> None:
+        spec = collectors.collector("googlecalendar", "upcoming")
+        payload = {"successful": True, "data": {"events": [], "errors_by_calendar": {
+            "a@group.calendar.google.com": "403 Quota exceeded for quota metric 'Queries'"}}}
+        lines = collectors.extract_warnings(spec, payload)
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("1 calendar(s) failed: a@group.calendar.google.com: 403 Quota exceeded"), lines[0])
+
+    def test_many_failures_are_counted_not_listed(self) -> None:
+        spec = collectors.collector("googlecalendar", "upcoming")
+        failures = {f"c{i}@x": f"boom {i}" for i in range(5)}
+        lines = collectors.extract_warnings(spec, {"successful": True, "data": {"errors_by_calendar": failures}})
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("5 calendar(s) failed: "))
+        self.assertTrue(lines[0].endswith("; and 2 more"), lines[0])
+
+    def test_empty_absent_or_undeclared_is_no_warning(self) -> None:
+        spec = collectors.collector("googlecalendar", "upcoming")
+        self.assertEqual(collectors.extract_warnings(spec, {"successful": True, "data": {"errors_by_calendar": {}}}), [])
+        self.assertEqual(collectors.extract_warnings(spec, {"successful": True, "data": {"events": []}}), [])
+        self.assertEqual(collectors.extract_warnings(spec, "not a dict"), [])
+        gmail = collectors.collector("gmail", "unread")
+        self.assertEqual(collectors.extract_warnings(gmail, {"successful": True, "data": {"errors_by_calendar": {"a": "b"}}}), [])
+
+    def test_a_list_of_messages_is_accepted(self) -> None:
+        spec = {"warn_keys": ["data.problems"], "warn_label": "page"}
+        lines = collectors.extract_warnings(spec, {"data": {"problems": ["p1 failed", "p2 failed"]}})
+        self.assertEqual(lines, ["2 page(s) failed: p1 failed; p2 failed"])
 
 
 class ExtractNotionTests(unittest.TestCase):
