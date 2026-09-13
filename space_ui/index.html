@@ -11,11 +11,12 @@
 <link rel="stylesheet" href="css/chrome.css?v=20260813-timeline2">
 <link rel="stylesheet" href="css/projects.css?v=20260911-issues1">
 <link rel="stylesheet" href="css/sharing.css?v=20260910-sharingpane1">
+<link rel="stylesheet" href="css/inbox.css?v=20260911-connections1">
 <link rel="stylesheet" href="css/wiki.css?v=20260906-steps1">
 <link rel="stylesheet" href="css/quirq.css?v=20260816-navswap1">
 <link rel="stylesheet" href="css/secrets.css?v=20260825-installlink1">
 <link rel="stylesheet" href="css/preview.css?v=20260827-htmlfix1">
-<link rel="stylesheet" href="css/connectors.css?v=20260903-connectors1">
+<link rel="stylesheet" href="css/connectors.css?v=20260911-connections2">
 
 <div class="topbar">
   <div class="brand">
@@ -155,6 +156,22 @@
   <div class="meta" id="fmeta"></div>
 </footer>
 
-<script type="module" src="js/app.js?v=20260911-issues1"></script>
+<!-- Cache stamps for the core modules that many files import bare. The
+     StaticFiles mount sends no Cache-Control, so a browser may hold a
+     heuristically fresh copy of core/api.js or core/ui.js that lacks an
+     export a fresh view asks for, and one module link error blanks the
+     whole shell. The map rewrites the bare specifier in EVERY importer,
+     cached ones included, to one stamped URL: one module instance, fetched
+     fresh. Bump a stamp here when its file changes. A core module with a
+     single importer keeps its stamp on that import instead (app.js,
+     views/connectors.js). -->
+<script type="importmap">
+{"imports":{
+  "./js/core/api.js":"./js/core/api.js?v=20260913-inboxfix1",
+  "./js/core/ui.js":"./js/core/ui.js?v=20260913-inboxfix1",
+  "./js/core/connections.js":"./js/core/connections.js?v=20260913-inboxfix1"
+}}
+</script>
+<script type="module" src="js/app.js?v=20260913-inboxfix1"></script>
 
 </body></html>
