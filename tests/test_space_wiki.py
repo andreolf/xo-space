@@ -85,7 +85,7 @@ class SpaceWikiTests(unittest.TestCase):
           emit('spacewalk');
           assert.equal(focused.id,'wiki-observability','hidden Wiki must not steal focus');
           view.show();
-          assert.equal(focused.id,'wiki-sessions');
+          assert.equal(focused.id,'wiki-agents');
           main.scrollTop=41;
           view.hide();view.show();
           assert.equal(main.scrollTop,41,'ordinary return preserves scroll');
@@ -150,6 +150,52 @@ class SpaceWikiTests(unittest.TestCase):
             ROOT / "space_ui" / "js" / "core" / "registry.js"
         ).read_text(encoding="utf-8")
         self.assertIn("scrollIntoView", registry)
+
+    def test_sessions_tab_is_renamed_agents_end_to_end(self) -> None:
+        """The Sessions tab was renamed to Agents (more relevant to what it
+        shows) — label AND route. The registry derives the #/agents route
+        and the #view-agents section from the view id, so the id, the
+        section markup, its stylesheet selector, the Wiki topic that
+        documents it, and the feeder that links to it all move together.
+        Legacy help keys still resolve to the renamed topic.
+
+        Kept on purpose: the module file name (sessions.js), the session
+        telemetry data file (sessions.json), and the internal Sessions
+        sub-view are session telemetry, not the tab."""
+        app = (ROOT / "space_ui" / "js" / "app.js").read_text(encoding="utf-8")
+        index = (ROOT / "space_ui" / "index.html").read_text(encoding="utf-8")
+        contract = view_contract("sessions")
+        # id drives the route: #/agents, section #view-agents
+        self.assertIn("id:'agents',label:'Agents',order:4", contract)
+        self.assertNotIn("id:'sessions'", contract)
+        self.assertNotIn("label:'Sessions'", contract)
+        self.assertIn("registerView(sessionsView);", app)
+        # the section the view mounts into follows the id (registry maps
+        # #view-<id>); a stale #view-sessions would leave the tab blank
+        self.assertIn('id="view-agents"', index)
+        self.assertNotIn('id="view-sessions"', index)
+        css = (ROOT / "space_ui" / "css" / "sessions.css").read_text(encoding="utf-8")
+        self.assertIn("#view-agents{", css)
+        self.assertNotIn("#view-sessions", css)
+        # the Wiki manual names and routes to the tab the same way the top bar does
+        wiki = (ROOT / "space_ui" / "js" / "views" / "wiki.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("id:'agents',title:'Agents'", wiki)
+        self.assertIn("view:'agents'", wiki)
+        # legacy help keys still resolve to the renamed topic
+        self.assertIn("'tab-agents':'agents'", wiki)
+        self.assertIn("'tab-sessions':'agents'", wiki)
+        self.assertIn("sessions:'agents'", wiki)
+        # the inbox feeder links session.started to the renamed tab
+        feeders = (ROOT / "services" / "inbox" / "feeders.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('link={"view": "agents"}', feeders)
+        # kept: the telemetry data file is still sessions.json
+        self.assertIn("/xo/sessions.json", (
+            ROOT / "space_ui" / "js" / "views" / "sessions.js"
+        ).read_text(encoding="utf-8"))
 
     def test_connectors_view_is_registered_and_identity_aware(self) -> None:
         app = (ROOT / "space_ui" / "js" / "app.js").read_text(encoding="utf-8")
