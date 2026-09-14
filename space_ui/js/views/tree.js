@@ -42,6 +42,8 @@ let model=null;      /* the tree, or null before the first load */
 let open=new Set();  /* expanded keys */
 let filter='';
 let loading=false;
+let projectsDirty=false,projectsRevision=0;
+addEventListener('space:projects-changed',()=>{projectsDirty=true;projectsRevision++;});
 const expandedStacks=new Set(); /* leaf cards showing all of their files */
 let seen=new Set();             /* keys on screen last render — the rest are new */
 let growing=false;              /* this render came from an expand: draw branches in */
@@ -110,12 +112,20 @@ export default {
   /* No tab of its own: the Files tab owns the nav slot and this is its third
      lens, reached from the List | Graph | Tree pill (or #/tree). */
   id:'tree',label:'Tree',order:3,nav:false,parent:'projects',
+  toolbar:{search:{
+    placeholder:'Filter tree by name…',
+    getValue:()=>filter,
+    setValue(value){
+      filter=String(value??'');
+      clearTimeout(debounce);
+      debounce=setTimeout(render,140);
+    },
+  }},
   async mount(el,ctx){
     root=el;
     go=ctx.switchTo;
     root.innerHTML='<div class="tv"><div class="prj-note">loading the workspace…</div></div>';
     root.addEventListener('click',onClick);
-    root.addEventListener('input',onInput);
     root.addEventListener('pointerdown',onPointerDown);
     root.addEventListener('pointermove',onPointerMove);
     root.addEventListener('pointerup',onPointerUp);
@@ -124,7 +134,7 @@ export default {
     root.addEventListener('wheel',onWheel,{passive:false});
     await load();
   },
-  show(){if(model===null&&!loading)load();}
+  show(){if((model===null||projectsDirty)&&!loading)load();}
 };
 
 /* ── model ────────────────────────────────────────────────────────────────
@@ -174,18 +184,21 @@ function build(data){
 }
 
 async function load(){
+  const revision=projectsRevision;
   loading=true;
   const res=await apiFetch(API_BASE+'/xo/space.json');
   loading=false;
+  if(revision!==projectsRevision)return load();
   if(!res.ok){
     root.querySelector('.tv').innerHTML=
       '<div class="prj-note">'+esc(res.offline?'xo-space is unreachable':res.error)+'</div>';
     return;
   }
-  model=build(res.data);
+  const firstLoad=model===null;
+  model=build(res.data);projectsDirty=false;
   /* Start from the root: the workspace open, its projects closed. The first
      screen is an index of the workspace, not 1500 rows. */
-  open=new Set(['']);
+  if(firstLoad)open=new Set(['']);
   render();
 }
 
@@ -258,6 +271,7 @@ function layout(n,key,depth,top,q,out){
 
 /* ── render ─────────────────────────────────────────────────────────────── */
 function render(){
+  if(!root||!model)return; /* a query must not replace loading or errors */
   const q=filter.trim().toLowerCase();
   const out={nodes:[],links:[],stacks:[]};
   const r=layout(model,'',0,PAD_Y,q,out);
@@ -269,6 +283,8 @@ function render(){
   const grew=growing;growing=false;
   root.querySelector('.tv').innerHTML=
     head()
+    +(q&&!matches(model,q)?'<div class="prj-note" role="status">No names match “'
+      +esc(filter.trim())+'”. Clear the search to show the tree.</div>':'')
     +'<div class="tv-canvas"><div class="tv-surface'+(grew?' is-growing':'')
       +'" style="width:'+Math.round(width)
       +'px;height:'+Math.round(height)+'px">'
@@ -291,16 +307,12 @@ function render(){
   if(cam===null)initCam();
   applyCam();
   restoreAnchor();
-  const input=root.querySelector('#tv-filter');
-  if(input&&filter){input.focus();input.setSelectionRange(filter.length,filter.length);}
 }
 function head(){
   return'<div class="tv-head">'
     +'<span class="prj-eyebrow">'+plural(model.dirs.size,'project')+' · '
       +plural(model.nDirs,'folder')+' · '+plural(model.nFiles,'file')+'</span>'
     +'<span class="prj-spacer"></span>'
-    +'<input class="tv-filter" id="tv-filter" placeholder="Filter by name…" '
-      +'autocomplete="off" spellcheck="false" value="'+esc(filter)+'">'
     +'<button class="sess-refresh" data-tv="projects">Projects only</button>'
     +'<button class="sess-refresh" data-tv="reset">Reset view</button>'
     +'<button class="sess-refresh" data-tv="reload">&#8635; Refresh</button>'
@@ -420,9 +432,3 @@ function restoreAnchor(){
   anchor=null;
 }
 let debounce=null;
-function onInput(e){
-  if(e.target.id!=='tv-filter')return;
-  filter=e.target.value;
-  clearTimeout(debounce);
-  debounce=setTimeout(render,140);
-}

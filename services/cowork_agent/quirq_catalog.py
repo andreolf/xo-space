@@ -1,6 +1,6 @@
 """Read-only, privacy-aware catalog of machine-local Quirq state.
 
-The catalog powers the local Quirq view, opened from the Setup tab's header
+The catalog powers the local Quirq view, opened from the Setup tab's Server section
 (deep link ``#/quirq``). It deliberately reports structure and
 operational summaries rather than serving arbitrary files: credential values,
 native session contents, cursor paths, and symlink targets never leave the
@@ -240,8 +240,47 @@ def _description(relative_path: str, *, is_dir: bool) -> str:
             return "GitHub issue mirror, re-fetched by the poller"
         if relative_path.endswith("/workitems"):
             return "Live workitem claims for this machine"
+        # Connections polling (Inbox): one folder per polled toolkit. The
+        # per-toolkit rule is scoped to exactly two segments so a deeper
+        # directory does not inherit it.
+        if relative_path == "connections":
+            return (
+                "Per-connection polling: config, state, and collected events, "
+                "one folder per toolkit"
+            )
+        if relative_path == "scheduler":
+            return "Saved manual commands and schedules, execution state, results, and logs"
+        if relative_path == "scheduler/runs":
+            return "Append-only command run history, one JSONL file per command"
+        if relative_path == "scheduler/logs":
+            return "Full command output logs, retained when a definition is deleted"
+        if (
+            relative_path.startswith("connections/")
+            and len(Path(relative_path).parts) == 2
+        ):
+            return "Polled connection: what to collect, how often, and what arrived"
         return "Directory"
     name = Path(relative_path).name
+    if relative_path == "inbox.json":
+        return "The Space Inbox: items, their seen/done state, and feeder cursors; hand-editable"
+    if relative_path == "scheduler/jobs.json":
+        return "Saved commands: arguments, environment overrides, descriptions, timeouts, and optional intervals"
+    if relative_path == "scheduler/state.json":
+        return "Command execution state: next run, running since, and last result"
+    if relative_path.startswith("scheduler/runs/"):
+        return "Run timestamps, trigger, status, return code, duration, and output tail"
+    if relative_path.startswith("scheduler/logs/"):
+        return "Appended command output through the command logger"
+    # Files under connections/ come first: the generic state.json rule below
+    # would otherwise claim a connection's state.json, and the events rule is
+    # scoped here so an unrelated events* file elsewhere keeps its own label.
+    if relative_path.startswith("connections/"):
+        if name == "config.json":
+            return "What to collect and how often; hand-editable"
+        if name == "state.json":
+            return "Poll cursors and the last result"
+        if name.startswith("events"):
+            return "Collected items, append-only, rotated at 2 MB"
     if name == "state.json":
         return "Installation and onboarding state"
     if name == "runtime.env":
@@ -403,7 +442,7 @@ def _watcher(root: Path) -> dict[str, Any]:
     configured = configured_settings()
     applied = effective_settings()
 
-    # Observed liveness. Everything above this line is *configuration* — it
+    # Observed liveness. Everything above this line is *configuration*: it
     # says what the watcher was asked to do, never whether the loop is running.
     heartbeat_path = root / "watcher" / "heartbeat.json"
     heartbeat = _read_json(heartbeat_path)
@@ -518,7 +557,7 @@ def _contract_status(
 
 
 def _project_outputs() -> dict[str, Any]:
-    # Same root helper as every other tab — see project_layout.
+    # Same root helper as every other tab; see project_layout.
     projects_root = xo_projects_root()
     host_root = (
         os.getenv("QUIRQ_HOST_PROJECTS_ROOT", "") or ""

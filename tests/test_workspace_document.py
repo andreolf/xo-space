@@ -173,6 +173,9 @@ class WorkspaceViewFileTests(unittest.TestCase):
                 },
                 clear=False,
             ):
+                # The first tick should always build: ``_last_build`` starts at
+                # 0.0 in-process and must not be treated as a recent build on a
+                # freshly booted host where monotonic() is still small.
                 views._last_build = 0.0
                 self.assertTrue(views.apply())     # first tick builds
                 self.assertFalse(views.apply())    # second is not due

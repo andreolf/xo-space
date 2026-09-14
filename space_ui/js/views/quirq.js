@@ -16,14 +16,14 @@ let timer=null;
 let loading=false;
 let go=()=>{};
 
-/* No top-level tab: Quirq opens from the button in Setup's header (and stays
+/* No top-level tab: Quirq opens from the Technical details button in Setup's Server section (and stays
    deep-linkable at #/quirq); Setup's tab lights up while it is open. It stays
    its own view rather than a card inside Setup so its 10s refresh and full
    state tree keep a page to themselves. */
 export default {
   id:'quirq',
   label:'Quirq',
-  order:8,nav:false,parent:'secrets',
+  order:8,nav:false,parent:'setup',
   async mount(el,ctx){
     root=el;
     go=ctx.switchTo;
@@ -58,7 +58,7 @@ function renderShell(){
         /* This view has no tab of its own — every other control on the page
            leads further away, so the way home belongs in the hero. */
         +'<div class="quirq-hero-actions">'
-          +'<button id="quirq-back" type="button" data-go-view="secrets">&#8592; Setup</button>'
+          +'<button id="quirq-back" type="button" data-go-view="setup/server">&#8592; Setup</button>'
           +'<button id="quirq-refresh" type="button">Refresh data</button>'
         +'</div>'
       +'</header>'
