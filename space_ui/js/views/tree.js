@@ -1,4 +1,6 @@
-/* Tree — the third Files lens, beside List and Graph.
+import {projectPage} from '../core/navigation.js?v=20260915-data1';
+import {dataViewControls} from '../core/data-views.js?v=20260915-data1';
+/* Tree — the third Data view, beside List and Graph.
 
    Same data as the Graph (.xo/space.json: every project, every mapped
    folder, every mapped file), read as a hierarchy instead of as a force
@@ -109,9 +111,8 @@ function onWheel(e){
 }
 
 export default {
-  /* No tab of its own: the Files tab owns the nav slot and this is its third
-     lens, reached from the List | Graph | Tree pill (or #/tree). */
-  id:'tree',label:'Tree',order:3,nav:false,parent:'projects',
+  /* Tree is a Data representation within Projects. */
+  ...projectPage('tree'),
   toolbar:{search:{
     placeholder:'Filter tree by name…',
     getValue:()=>filter,
@@ -124,7 +125,7 @@ export default {
   async mount(el,ctx){
     root=el;
     go=ctx.switchTo;
-    root.innerHTML='<div class="tv"><div class="prj-note">loading the workspace…</div></div>';
+    root.innerHTML='<div class="tv">'+emptyToolbar()+'<div class="prj-note">loading the workspace…</div></div>';
     root.addEventListener('click',onClick);
     root.addEventListener('pointerdown',onPointerDown);
     root.addEventListener('pointermove',onPointerMove);
@@ -134,7 +135,8 @@ export default {
     root.addEventListener('wheel',onWheel,{passive:false});
     await load();
   },
-  show(){if((model===null||projectsDirty)&&!loading)load();}
+  show(){if((model===null||projectsDirty)&&!loading)load();},
+  refresh:load,
 };
 
 /* ── model ────────────────────────────────────────────────────────────────
@@ -191,7 +193,7 @@ async function load(){
   if(revision!==projectsRevision)return load();
   if(!res.ok){
     root.querySelector('.tv').innerHTML=
-      '<div class="prj-note">'+esc(res.offline?'xo-space is unreachable':res.error)+'</div>';
+      emptyToolbar()+'<div class="prj-note">'+esc(res.offline?'xo-space is unreachable':res.error)+'</div>';
     return;
   }
   const firstLoad=model===null;
@@ -310,14 +312,15 @@ function render(){
 }
 function head(){
   return'<div class="tv-head">'
+    +dataViewControls('tree')
     +'<span class="prj-eyebrow">'+plural(model.dirs.size,'project')+' · '
       +plural(model.nDirs,'folder')+' · '+plural(model.nFiles,'file')+'</span>'
     +'<span class="prj-spacer"></span>'
     +'<button class="sess-refresh" data-tv="projects">Projects only</button>'
     +'<button class="sess-refresh" data-tv="reset">Reset view</button>'
-    +'<button class="sess-refresh" data-tv="reload">&#8635; Refresh</button>'
   +'</div>';
 }
+function emptyToolbar(){return '<div class="tv-head">'+dataViewControls('tree')+'</div>';}
 /* An S-curve, not an elbow: at 228px of column width a bezier reads the
    parent→child direction at a glance without a corner every level. */
 function curve(l){
@@ -376,7 +379,6 @@ function onClick(e){
   if(act){
     if(act.dataset.tv==='projects'){open=new Set(['']);expandedStacks.clear();render();}
     else if(act.dataset.tv==='reset'){initCam();applyCam();}
-    else{model=null;root.querySelector('.tv').innerHTML='<div class="prj-note">loading…</div>';load();}
     return;
   }
   const node=e.target.closest('[data-key]');

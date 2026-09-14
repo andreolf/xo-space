@@ -68,18 +68,21 @@ const node=(id,tag='DIV',parent=null)=>{
   const el=new Element(id,tag);parent?.appendChild(el);return el;
 };
 const topbar=node('topbar'),controls=node('toolbar-controls','DIV',topbar);
-const graphRoot=node('graph-root','DIV',controls),graphSearch=node('graph-search','DIV',controls);
+const sectionNav=node('section-nav');
+const graphRoot=node('graph-root','DIV',sectionNav),graphSearch=node('graph-search','DIV',controls);
 const localSearch=node('view-search-wrap','DIV',controls);
 const input=node('view-search','INPUT',localSearch),clear=node('view-search-clear','BUTTON',localSearch);
 node('view-search-hint','KBD',localSearch);
 const graphInput=node('q','INPUT',graphSearch);
 node('root-btn','BUTTON',graphRoot);
+const rootInput=node('root-q','INPUT',graphRoot);
 node('rootdd','DIV',graphRoot);node('root-ac','DIV',graphRoot);node('qac','DIV',graphSearch);
 const meta=node('fmeta'),stage=node('stage'),tabs=node('tabs');
 globalThis.document={activeElement:null,
   getElementById:id=>elements.get(id)||null,
   querySelector:selector=>selector==='.topbar'?topbar:selector==='.tabs'?tabs:null,
   createElement:tag=>new Element('',tag.toUpperCase()),
+  querySelectorAll:selector=>selector.startsWith('.tabs ')?tabs.children:[],
 };
 const base=pathToFileURL(process.cwd()+'/space_ui/js/core/');
 const registry=await import(new URL('registry.js',base));
@@ -210,13 +213,14 @@ assert.equal(key('/').defaultPrevented,false);assert.equal(document.activeElemen
 document.activeElement=null;key('/');assert.equal(document.activeElement,input);
 searchable=false;secondContext.refreshToolbar();
 assert.equal(controls.hidden,true);assert.equal(document.activeElement,null);
+graphRoot.hidden=true; // The independent Projects root controller owns this state.
 await registry.switchTo('graph');
-assert.equal(localSearch.hidden,true);assert.equal(graphRoot.hidden,false);assert.equal(meta.hidden,false);
+assert.equal(localSearch.hidden,true);assert.equal(graphRoot.hidden,true);assert.equal(meta.hidden,false);
 key('/');assert.equal(document.activeElement,graphInput);
-for(const id of ['rootdd','qac','root-ac'])elements.get(id).classList.add('is-open');
+elements.get('qac').classList.add('is-open');
 await registry.switchTo('wiki');
 assert.equal(controls.hidden,true);assert.equal(meta.hidden,true);assert.equal(document.activeElement,null);
 assert.equal(key('/').defaultPrevented,false);
-for(const id of ['rootdd','qac','root-ac'])assert.equal(elements.get(id).classList.contains('is-open'),false);
+assert.equal(elements.get('qac').classList.contains('is-open'),false);
 secondContext.refreshToolbar();assert.equal(topbar.dataset.toolbar,'none');
 """)

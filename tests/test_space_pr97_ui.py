@@ -211,15 +211,15 @@ class InboxViewTests(unittest.TestCase):
         self.assertIn('data-ts="\'+esc(it.ts)+\'"', self.src)
 
     def test_badge_poll_rests_while_the_view_is_shown(self) -> None:
-        show = slice_between(self.src, "show(){", "hide(){")
+        show = slice_between(self.src, "function showInboxPage(page){", "function hideInbox(")
         self.assertIn("shown=true;", show)
         self.assertIn("clearSlottedInterval('inbox-badge');", show)
-        hide = slice_between(self.src, "hide(){", "};")
+        hide = slice_between(self.src, "function hideInbox(", "const skeleton=")
         self.assertIn("shown=false;", hide)
         self.assertIn("clearSlottedInterval('inbox-poll');", hide)
         self.assertIn("startBadgePoll();", hide)
         init = slice_between(self.src, "export function initInboxBadge(){", "}")
-        self.assertIn("if(!shown)startBadgePoll();", init)
+        self.assertIn("if(!shown||inboxPage!=='items')startBadgePoll();", init)
         self.assertIn("function startBadgePoll(){setSlottedInterval('inbox-badge'", self.src)
 
     def test_badge_never_rewrites_the_tab_label(self) -> None:
@@ -881,7 +881,7 @@ class SharingViewTests(unittest.TestCase):
         self.assertIn("[esc(k.author),rel(k.date)].filter(Boolean).join(' · ')", pane)
         self.assertNotIn("' · '+rel(k.date)", pane)
         self.assertNotIn("const dtfmt=", pane)  # was unused
-        self.assertIn("from './sharing_data.js?v=20260914-projectmanage1';", pane)
+        self.assertIn("from './sharing_data.js?v=20260914-inboxshare1';", pane)
 
 
 class ShellTests(unittest.TestCase):
@@ -893,30 +893,34 @@ class ShellTests(unittest.TestCase):
 
     def test_stamps_moved_together(self) -> None:
         app = read("js/app.js")
-        # Canonical Setup section URLs advance every participating handoff
-        # and the registry; unchanged resources keep their URLs.
-        project_stamp = "20260914-projectmanage1"
-        setup_stamp = "20260914-setuproutes1"
-        for view in ("sharing", "inbox", "wiki", "projects", "quirq", "setup"):
-            self.assertIn("./views/" + view + ".js?v=" + setup_stamp + "'", app)
-        context_stamp = "20260914-context1"
-        for view in ("tree",):
-            self.assertIn("./views/" + view + ".js?v=" + project_stamp + "'", app)
+        # The shared routing vocabulary, all participating views and shell
+        # imports advance together; unchanged controllers retain their URLs.
+        data_stamp = "20260915-data1"
+        for view in ("wiki", "quirq", "tree", "sessions", "inbox", "sharing", "projects", "inbox-activity", "project-manage"):
+            self.assertIn("./views/" + view + ".js?v=" + data_stamp + "'", app)
+        for module in ("section-nav", "navigation", "preview"):
+            self.assertIn("./core/" + module + ".js?v=" + data_stamp + "'", app)
+        self.assertIn("./views/atlas.js?v=20260915-timeline1'", app)
+        self.assertIn("./core/registry.js?v=20260914-actions1'", app)
+        self.assertIn("./core/toolbar.js?v=20260914-files2'", app)
+        controls_stamp = "20260914-manage1"
+        self.assertIn("./views/setup.js?v=" + controls_stamp + "'", app)
+        self.assertIn("./core/project-actions.js?v=20260914-details1'", app)
+        compact_stamp = "20260914-projectcompact1"
         self.assertIn("./views/connectors.js?v=20260914-setupapps1'", app)
-        results_stamp = "20260914-results1"
-        # Timeline became the last Projects lens: atlas (its lenses) and the
-        # lens switch advanced together to carry the new pill.
-        timeline_stamp = "20260914-timelinelens1"
-        self.assertIn("./views/atlas.js?v=" + project_stamp + "'", app)
-        # The Sessions tab was renamed to Agents: its view and the Wiki topic
-        # that documents it advanced together to carry the new label.
-        agents_stamp = "20260914-agentstab1"
-        self.assertIn("./views/sessions.js?v=" + agents_stamp + "'", app)
-        self.assertIn("./core/registry.js?v=" + setup_stamp + "'", app)
-        self.assertIn("./core/toolbar.js?v=" + context_stamp + "'", app)
-        self.assertIn("./core/lens-switch.js?v=" + timeline_stamp + "'", app)
-        self.assertRegex(app, r"\./core/preview\.js\?v=\d{8}-[a-z0-9]+'")
+        results_stamp = "20260914-navigation1"
         html = read("index.html")
+        self.assertIn('href="css/projects.css?v=20260915-data1"', html)
+        self.assertIn('href="css/navigation.css?v=20260915-timeline1"', html)
+        for sheet in ("project-share",):
+            self.assertIn('href="css/' + sheet + '.css?v=20260914-inboxshare1"', html)
+        for sheet in ("setup",):
+            self.assertIn('href="css/' + sheet + '.css?v=' + controls_stamp + '"', html)
+        self.assertIn('href="css/project-management.css?v=20260915-data1"', html)
+        for sheet in ("inbox-activity",):
+            self.assertIn('href="css/' + sheet + '.css?v=20260914-details1"', html)
+        for sheet in ("graph", "preview"):
+            self.assertIn('href="css/' + sheet + '.css?v=' + compact_stamp + '"', html)
         # Later view changes legitimately advance the shell and Wiki stamps;
         # test_space_wiki checks that the cache-bust chain stays intact.
         self.assertRegex(html, r'src="js/app\.js\?v=\d{8}-[a-z0-9]+"')
@@ -936,7 +940,8 @@ class ShellTests(unittest.TestCase):
         self.assertLess(m.start(), html.index('<script type="module" src="js/app.js'))
         imports = json.loads(m.group(1))["imports"]
         for name in self.CORE_MAPPED:
-            self.assertEqual(imports["./js/core/" + name], "./js/core/" + name + "?v=" + STAMP, name)
+            stamp = "20260914-files2" if name == "api.js" else STAMP
+            self.assertEqual(imports["./js/core/" + name], "./js/core/" + name + "?v=" + stamp, name)
         # one instance means every importer uses the bare specifier
         for path in sorted((UI / "js").rglob("*.js")):
             src = path.read_text(encoding="utf-8")
