@@ -43,11 +43,8 @@ jobs:
       - name: Unit test suite
         run: venv/bin/python -m unittest discover -s tests -t .
 
-      - name: Import gate — the app must build under every runtime
-        run: |
-          for a in claude_code codex openclaw hermes antigravity; do
-            AGENT_NAME=$a venv/bin/python -c "import server; print('$a', len(server.app.openapi()['paths']))"
-          done
+      - name: Import gate + route parity — the app must build under every runtime
+        run: venv/bin/python scripts/check_route_parity.py
 
       - name: install.sh harness
         run: bash tests/install_sh_harness.sh
