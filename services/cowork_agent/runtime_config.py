@@ -42,6 +42,35 @@ INSTALL_COMMAND = "curl -fsSL https://quirq.ai/install | sh"
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _SESSION_SCAN_CAP = 10_000
+REPO_ROOT = Path(__file__).resolve().parents[2]
+NATIVE_PID_FILE = Path("/tmp/xo-space.pid")  # cowork-api.sh's process manager
+
+
+def restart_mode() -> str:
+    """Only restart a supervisor-managed process or our native runner.
+
+    The native pid can be the server itself or its bash wrapper. A stale
+    pid file (or another checkout's server) must not enable process control.
+    Reload workers are foreground development processes, not managed servers.
+    """
+    if _as_bool(os.getenv("UVICORN_RELOAD"), default=False):
+        return "foreground"
+    if _as_bool(os.getenv("QUIRQ_MANAGED_CONTAINER"), default=False):
+        return "managed"
+    return "native" if native_restart_pid() is not None else "foreground"
+
+
+def native_restart_pid() -> int | None:
+    """The PID owned by this native server's runner, checked again on restart."""
+    script = REPO_ROOT / "cowork-api.sh"
+    if script.is_file() and os.access(script, os.X_OK):
+        try:
+            pid = int(NATIVE_PID_FILE.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return None
+        if pid > 1 and pid in {os.getpid(), os.getppid()}:
+            return pid
+    return None
 
 
 def _secrets_fingerprint() -> str:
@@ -564,6 +593,7 @@ def runtime_status() -> dict[str, Any]:
     configured = configured_settings()
     applied = effective_settings()
     reasons = restart_reasons()
+    mode = restart_mode()
     # Additive and best-effort: the Setup card renders it when present, and
     # a failure here must not take down the whole runtime-config endpoint.
     try:
@@ -578,10 +608,8 @@ def runtime_status() -> dict[str, Any]:
         "applied": applied,
         "restart_required": bool(reasons),
         "restart_reasons": reasons,
-        "restart_supported": _as_bool(
-            os.getenv("QUIRQ_ALLOW_SELF_RESTART"),
-            default=False,
-        ),
+        "restart_supported": mode != "foreground",
+        "restart_mode": mode,
         "managed_container": _as_bool(
             os.getenv("QUIRQ_MANAGED_CONTAINER"),
             default=False,
