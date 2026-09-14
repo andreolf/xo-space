@@ -1,15 +1,15 @@
-# Space: the workspace knowledge graph UI
+# Space UI
 
-An explorable map of `~/xo-projects`. Five top-level tabs: **Projects**
+An explorable map of `~/xo-projects`. Four top-level tabs: **Projects**
 (Dashboard | List | Graph | Tree | Sharing | Timeline lenses under one tab),
-**Agents**, **Inbox**, **Setup**, and **Connectors**, plus the
-**Quirq** state view, which has no tab of its own and opens from Setup's header.
+**Agents**, **Inbox**, and **Setup**, plus the
+**Quirq** state view, which has no tab of its own and opens from **Setup → Server → Technical details**.
 
 Space opens on Dashboard (`#/dashboard`) with Projects highlighted. Clicking
 the Projects tab or pressing `1` opens List (`#/projects`); existing deep links
 to `#/graph`, `#/tree`, `#/sharing`, and `#/time` (Timeline) keep their
 meanings. The numbered shortcuts follow the top bar: Projects `1`, Agents
-`2`, Inbox `3`, Setup `4`, Connectors `5`. Timeline is a lens of the Projects
+`2`, Inbox `3`, Setup `4` (`#/setup/workspace`). Connectors (`#/setup/connectors`) and Secrets (`#/setup/secrets`) open inside Setup. Timeline is a lens of the Projects
 tab, reached from the Projects lens switch rather than a numbered shortcut.
 
 **Wiki** and **GitHub** stay at the top right across views. Wiki opens the local
@@ -20,9 +20,9 @@ tab. Existing first-run and storage-help actions focus the matching overview
 section. The overview itself works offline.
 
 The toolbar adapts to the active page. Dashboard and Graph keep the root
-picker and map autocomplete. List, Tree, Timeline, Connectors, Inbox, and
-the Sessions list have their own search; typing there keeps you on that page.
-Setup, Wiki, Sharing, Quirq, and the Sessions charts/detail have no search
+picker and map autocomplete. List, Tree, Timeline, Setup, Inbox, and
+the Agents session list have their own search; typing there keeps you on that page.
+Wiki, Sharing, Quirq, and the Agents charts/detail have no search
 toolbar. On phones these pages also give back the empty toolbar row.
 
 | Page | Search scope |
@@ -30,7 +30,8 @@ toolbar. On phones these pages also give back the empty toolbar row.
 | Projects List | Project names in the loaded catalog. |
 | Tree | Folder and file names, keeping the ancestors of matches visible. |
 | Timeline | Project names; the selected timeline mode and date range still apply. |
-| Connectors | Toolkit name, identifier, description, and resolved connected account label. Filtering preserves open controls and unsaved polling edits. |
+| Setup | Setting names and topics. Choose a result to open its section; searches never read field values or credentials, and all unfinished forms stay mounted. |
+| Setup → Connectors | Workspace integrations and account apps by name, identifier, description, and connected account label. Filtering preserves open controls and unsaved edits. |
 | Inbox | Title, body, kind, source, and project in the loaded status page, intersected with the source filter. The matching count shows this scope. |
 | Sessions list | Project, path, source, model, and session ID in the loaded sessions, intersected with the selected sources. Matching counts distinguish loaded rows from the total. |
 
@@ -61,7 +62,7 @@ directly. Descended from the single-file xo-atlas `v3.html`.
 | `js/core/api.js` | The one fetch layer: `API_BASE`, query-string auth forwarding, offline / HTTP-error / 501 classification, single-flight GETs, and `failText(res)`, the one wording for a failed result ("xo-space is unreachable", "not available for the active agent", or the HTTP error) that every tab shows. |
 | `js/core/store.js` | Idempotency helpers: single-flight promises, slotted (non-stacking) intervals. |
 | `js/core/ui.js` | Shared UI helpers: `toast`, `esc` (HTML escaping for every interpolated value), `rel` (relative time; empty for a missing stamp), `pills` (a filter strip of `data-<attr>` buttons with `is-on` / `aria-pressed`). |
-| `js/core/connections.js` | Pure formatters over one `GET /api/connections` entry: `every` (cadence), `collectorLabels`, `pollLine` (last poll or the error). Shared by the Inbox's Connections section and the Connectors tab so both read the same. |
+| `js/core/connections.js` | Pure formatters over one `GET /api/connections` entry: `every` (cadence), `collectorLabels`, `pollLine` (last poll or the error). Shared by the Inbox's Connections section and Setup Connectors so both read the same. |
 | `js/core/server-widget.js` | Footer server pill (status poll + terminal start hint). |
 
 | `js/core/preview.js` | File previewer drawer. Any view opens it with a `space:preview-file` event; markdown renders through `markdown.js`, HTML renders in an empty-`sandbox` iframe, everything else as escaped source. |
@@ -72,11 +73,17 @@ directly. Descended from the single-file xo-atlas `v3.html`.
 | `js/views/tree.js` | The Projects Tree lens: horizontal hierarchy over the same `/xo/space.json` dataset as Graph: folders as columns, files stacked beside their parent. Deep-link `#/tree`. |
 | `js/views/chat.js` | The Chat view: Plane-B chat (`/api/chat/prompt` → SSE stream → transcript refetch) with session sidebar, project binding for new sessions, and mini-markdown rendering. Works across claude_code / hermes / openclaw. Deliberately unregistered: no tab. |
 | `js/views/wiki.js` | The compact Wiki overview: local quickstart/view actions and links to detailed online guides. Opens from the header resource link (`nav:false`, `#/wiki`), with no primary tab. Legacy `space:wiki-page` requests focus the matching topic without replacing the overview. |
-| `js/views/quirq.js` | The Quirq view: machine-local `.quirq` state (watcher infrastructure and the derived runtime tier) beside the durable project `.xo` output. Its file rows come from `services/cowork_agent/quirq_catalog.py`, which is data-driven: a file that moves root without a catalog entry to match renders as `0 present`. No tab of its own: `nav:false, parent:'secrets'`, opened from Setup's header button (`#/quirq`). |
-| `js/views/secrets.js` | The Setup view: storage roots, agent runtime, watcher coverage, write-only credentials, git self-update, server restart and saved commands. |
+| `js/views/quirq.js` | The Quirq view: machine-local `.quirq` state (watcher infrastructure and the derived runtime tier) beside the durable project `.xo` output. Its file rows come from `services/cowork_agent/quirq_catalog.py`, which is data-driven: a file that moves root without a catalog entry to match renders as `0 present`. No tab of its own: `nav:false, parent:'setup'`, opened from **Setup → Server → Technical details** (`#/quirq`). |
+| `js/views/setup.js` | The guided Setup controller: `createSetupViews` registers Workspace, Intelligence layer, Projects, then Connectors, Secrets, Commands and Server management under `#/setup/<section>`. Every route shares one mounted shell, so forms keep drafts across sections and status refreshes. |
+| `js/views/setup-shell.js` | Setup layout and stable form controls. Workspace shows Space ID and verified account status; Secrets uses the existing masked-list and single-key environment APIs. |
+| `js/core/setup-sections.js` | Setup section IDs, labels, canonical routes and compatibility mappings for old section handoffs. |
+| `js/views/setup-search.js` | Searchable setting names and topics; opens the existing controls without reading their values or rebuilding forms. |
+| `js/views/setup-identity.js` | Read-only Workspace metadata, verified XO user ID and GitHub account from `/space/setup/status`; no tokens or browser session minting. |
+| `js/core/setup-state.js` | Factual Setup summaries and the next action from runtime configuration; no authentication or ingestion readiness claims. |
 | `js/views/setup-commands.js` | Setup Commands card: definition form, run controls, live results and history drawer over `/api/schedules`. |
 | `js/core/command-results.js` | Shared command Inbox/results drawer used by Setup and Inbox Jobs, including output, status, working directory and log path. |
-| `js/views/connectors.js` | The Connectors view: Composio toolkits, connect / disconnect, the Actions drawer and the Polling drawer (`PUT /api/connections/{toolkit}`). The Polling drawer keeps unsaved edits across the repaints Refresh, the Actions drawer and a connect landing cause; Save repaints from the server's copy, and closing the drawer (Hide, opening another toolkit's drawer, turning the toolkit off, disconnect) discards them. The only view that authenticates (`js/core/session.js`). |
+| `js/views/connectors.js` | The persistent Connectors controller inside Setup: Composio toolkits, connect / disconnect, the Actions drawer and the Polling drawer (`PUT /api/connections/{toolkit}`). The Polling drawer keeps unsaved edits across the repaints Refresh, the Actions drawer and a connect landing cause; Save repaints from the server's copy, and closing the drawer (Hide, opening another toolkit's drawer, turning the toolkit off, disconnect) discards them. Lazily authenticates on first selection (`js/core/session.js`); opens at `#/setup/connectors`, with `#/connectors` retained as an alias. |
+| `js/views/native-connectors.js` | GitHub, MagicPath, Vercel, Google Drive and OneDrive connection controls using their existing `/api/connectors/` routes. Status reads run independently of XO sign-in; credential fields and pending authorization stay mounted across filtering, refresh and navigation. |
 
 | `js/core/markdown.js` | Escape-first mini-markdown (fences, inline code, bold/italic, links, headings, lists). |
 
@@ -123,10 +130,73 @@ to 60 units: generated data can put 100+ leaves in one cluster, whose summed
 spring stiffness makes the original explicit-Euler sim diverge (positions hit
 1e20 and the canvas goes blank).
 
-## Setup tab: restart and commands
+## Setup tab
 
-**Restart server** lives in the hero beside **Refresh status**. **Apply & restart**
-and the self-update card use the same `/space/server/restart` route. Restart takes
+Three setup steps keep one section visible at a time. `core/setup-sections.js` owns section IDs, labels and compatibility aliases; `setup-shell.js` renders the layout and `setup.js` owns behavior, styled by `setup.css`. Legacy agent/activity section events resolve to Intelligence, and sharing restore actions open Projects:
+
+1. **Workspace** shows the Space ID, configured workspace name/owner, verified XO user ID and GitHub account, then the projects and Space data folders. Applied paths and connection diagnostics are expandable.
+2. **Intelligence layer** combines agent connection with activity collection. Choose the chat agent, review installation and credential checks, and select which agents contribute sessions and project history. Agent and activity settings retain independent forms, saves and drafts; other agents and detailed paths are collapsed.
+3. **Projects** lists local projects, clones Git repositories and reviews sharing before removal. Each access grant must be revoked individually before deleting the local folder. Open Projects takes you to the main Projects view.
+
+**Next** moves between steps without saving. All forms stay mounted, so section
+and app navigation preserve drafts. Refresh and saving a credential also keep
+unfinished folder, agent and activity edits. Agent and Activity saves send all
+required runtime fields, but use the last saved values for the other form. Intelligence also retains the advanced collection interval and usage-reporting status. Project drafts, count and load errors belong to the Projects step and remain independent of runtime settings.
+The status strip points to pending changes or a reported folder/installation
+issue; it does not infer authenticated access from a saved key or installed CLI.
+
+Every section has a URL that opens it directly:
+
+| Section | URL |
+| --- | --- |
+| Workspace | `#/setup/workspace` |
+| Intelligence layer | `#/setup/intelligence` |
+| Projects | `#/setup/projects` |
+| Connectors | `#/setup/connectors` |
+| Secrets | `#/setup/secrets` |
+| Commands | `#/setup/commands` |
+| Server | `#/setup/server` |
+
+Opening the Setup tab starts at Workspace. Legacy `#/setup`, `#/connectors` and `#/secrets` links resolve to the corresponding canonical URLs. The **Manage** group opens **Connectors**, **Secrets**, **Commands** or **Server** directly. Secrets lists configured keys with fixed masks and uses `PATCH /api/secrets/{key}` and `DELETE /api/secrets/{key}` to edit the existing environment store. Workspace identity uses the read-only `GET /space/setup/status`; unavailable checks are distinct from missing or rejected credentials. Inbox Jobs' **Open Setup** button opens `#/setup/commands`; Sharing's **Clone in Setup** opens `#/setup/projects`. **Server → Technical details** opens Quirq's state browser, whose Setup button returns to `#/setup/server`.
+
+The topbar search stays visible throughout Setup. Search setting names such as
+“folders”, “secrets” or “restart”, then choose a result to open its control.
+Inside Connectors, the same input filters the app cards instead.
+
+Connectors groups **Workspace integrations** (GitHub, MagicPath, Vercel,
+Google Drive and OneDrive) above **Account apps** from Composio. GitHub supports
+a personal access token or device sign-in; Vercel supports an API token or
+browser sign-in with a pasted redirect URL when needed. Disconnect an existing
+Vercel connection before starting another browser sign-in. MagicPath has an
+explicit skill/CLI installation action and authorization-code sign-in. Drive
+accounts use the existing rclone add, authorization, cancel and remove routes;
+“Configured” means a complete stored remote, not a live account check.
+Removing a remote does not delete cloud files. Account apps retain their
+workspace toggles, account labels, action permissions and Inbox polling.
+No installation or sign-in starts from a native status refresh.
+
+Project management uses `POST /api/xo-projects` with `repository_url` and
+`project_id`, `GET /api/xo-projects/{id}/removal`, and `DELETE /api/xo-projects/{id}`
+with `confirm_project_id`. Existing folders are never overwritten. Removal
+checks both workspace sharing grants and the local collaborator roster; each
+grant must be revoked individually, and each other collaborator removed.
+Unavailable or malformed access checks block removal. The server repeats its
+checks when Delete is pressed, regardless of the earlier preview. Deletion
+removes local files; it does not delete the remote repository or backups.
+Automatic sharing clones remember the local removal so they do not recreate
+the folder. Explicitly cloning it again restores it. Projects List, Tree and
+Sharing refresh on return; a previously opened map offers **Reload map** without
+automatically discarding Setup drafts.
+
+For never-shared Git repositories, XO Swarm must support `GET /commits/members`
+returning `200` with `members: []` when its sharing ledger has no rows. Older
+versions return the same `403` as an inaccessible shared repository; Space
+keeps removal blocked in that case. Deploy the companion `members_for_user`
+change before enabling removal of never-shared repositories. Existing shared
+repositories still require an active, bound caller and individual revocation.
+
+**Restart server**, **Apply & restart** and the update action appear in Server,
+with only the relevant restart button visible. They use `/space/server/restart`. Restart takes
 a few seconds; the footer pill may go offline before it returns. The page reloads
 when a new server instance responds, so every tab loads the updated code.
 
@@ -145,6 +215,14 @@ interval. Leave the interval blank for manual-only execution. A command line is
 split without a shell; validation errors appear in the card. Interval jobs show a
 “Runs every N” chip and use the watcher. **Edit** preserves existing environment,
 project and enabled settings.
+
+The information tooltip beside **Saved commands** explains **Copy agent prompt**.
+The card shows the full `POST /api/schedules` creation URL. The copied prompt
+includes a complete curl request with JSON, checks for existing jobs, defaults
+to manual execution and asks the agent to verify the saved command. It excludes
+page query parameters. If clipboard access is unavailable, a selectable prompt
+appears without changing a command draft. The page also shows how to run commands,
+the default log/history paths and where to find the exact log path in Inbox.
 
 **Run** executes through the command utility and disables while running. The card
 polls the job every three seconds until the status and duration appear. The row
@@ -169,8 +247,8 @@ the server's environment, including when the watcher is disabled for manual runs
 
 ## Agents tab
 
-The second topbar tab (`Projects | Agents | Inbox | Setup |
-Connectors`) is a session-telemetry dashboard: per-session stats rendered as cards,
+The second topbar tab (`Projects | Agents | Inbox | Setup`)
+is a session-telemetry dashboard: per-session stats rendered as cards,
 tables, and hand-drawn canvas charts (no dependencies), re-skinned to the
 Space theme. The payload is assembled from every backend that implements the
 `session_telemetry` capability, so a runtime that reports nothing shows as

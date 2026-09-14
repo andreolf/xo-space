@@ -9,7 +9,7 @@
    tabs: own fetch, own poll, own failure card. The escape, the relative
    time, the pill strip and the failure wording come from core; the
    connections wording comes from core/connections.js, shared with the
-   Connectors tab so one payload never reads two ways. */
+   Connectors section so one payload never reads two ways. */
 import {API_BASE,apiFetch,failText} from '../core/api.js';
 import {clearSlottedInterval,setSlottedInterval} from '../core/store.js';
 import {esc,pills,rel,toast} from '../core/ui.js';
@@ -319,7 +319,7 @@ function connsHTML(){
   }
   const rows=polled();
   if(!rows.length)return'<div class="inb-conns"><div class="inb-conn-meta">'
-    +'No connections polled yet. Connect a toolkit on the Connectors tab and turn on polling.</div></div>';
+    +'No updates yet. Open Setup → Connectors to connect an app and turn on polling.</div></div>';
   const errors=rows.filter(c=>c.last_error).length;
   const open=connsIsOpen();
   return'<div class="inb-conns'+(open?' is-open':'')+'">'
@@ -449,9 +449,13 @@ function onClick(e){
     case'delete':remove(id);break;
     case'conns-toggle':connsOpen=!connsIsOpen();render();break;
     case'conn-poll':pollConn(b.dataset.toolkit);break;
-    case'conn-config':switchTo('connectors');break;
+    case'conn-config':switchTo('setup/connectors');break;
     case'jobs-refresh':loadJobs();break;
-    case'jobs-setup':switchTo('secrets');break;
+    case'jobs-setup':
+      Promise.resolve(switchTo('setup/commands')).then(()=>{
+        if(location.hash==='#/setup/commands')dispatchEvent(new CustomEvent('space:setup-section',{detail:{panel:'commands'}}));
+      });
+      break;
     case'job-results':{
       const job=jobs?.find(item=>item.id===b.dataset.job);
       if(job)openCommandResults({id:job.id,name:job.name||job.id});

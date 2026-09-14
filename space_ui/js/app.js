@@ -1,23 +1,23 @@
 /* Entry point. Adding a view = create js/views/<name>.js exporting the view
    contract (see core/registry.js), then import + register it here: no
    bundler, so no file globbing; this import list is the one manual step. */
-import {registerView,startRegistry} from './core/registry.js?v=20260914-context1';
+import {registerView,startRegistry} from './core/registry.js?v=20260914-setuproutes1';
 import {initServerWidget} from './core/server-widget.js?v=20260914-commands2';
 import {initToolbar} from './core/toolbar.js?v=20260914-context1';
 import {initLensSwitch} from './core/lens-switch.js?v=20260914-timelinelens1';
 import {initPreview} from './core/preview.js?v=20260914-wikihub1';
-import {dashboardView,graphView,timeView} from './views/atlas.js?v=20260914-timelinelens1';
+import {dashboardView,graphView,timeView} from './views/atlas.js?v=20260914-projectmanage1';
 import sessionsView from './views/sessions.js?v=20260914-agentstab1';
-import inboxView,{initInboxBadge} from './views/inbox.js?v=20260914-results1';
-import projectsView from './views/projects.js?v=20260914-context1';
-import treeView from './views/tree.js?v=20260914-context1';
-import sharingView from './views/sharing.js?v=20260914-accounts1';
+import inboxView,{initInboxBadge} from './views/inbox.js?v=20260914-setuproutes1';
+import projectsView from './views/projects.js?v=20260914-setuproutes1';
+import treeView from './views/tree.js?v=20260914-projectmanage1';
+import sharingView from './views/sharing.js?v=20260914-setuproutes1';
 /* Chat is deliberately hidden from the tab bar: re-import ./views/chat.js
    and register it below to bring the tab back. */
-import wikiView from './views/wiki.js?v=20260914-agentstab1';
-import quirqView from './views/quirq.js?v=20260817-plural1';
-import secretsView from './views/secrets.js?v=20260914-results1';
-import connectorsView from './views/connectors.js?v=20260914-context1';
+import wikiView from './views/wiki.js?v=20260914-setuproutes1';
+import quirqView from './views/quirq.js?v=20260914-setuproutes1';
+import {createSetupViews} from './views/setup.js?v=20260914-setuproutes1';
+import connectorsView from './views/connectors.js?v=20260914-setupapps1';
 
 
 /* app-shell bulkhead: a fatal script error logs instead of white-screening */
@@ -29,12 +29,19 @@ addEventListener('unhandledrejection',e=>console.error('Space unhandled rejectio
 function initTopbarInset(){
   const topbar=document.querySelector('.topbar');
   if(!topbar)return;
-  let previous=null;
+  let previous=null,previousWidth=null;
   const update=()=>{
-    const inset=Math.ceil(topbar.getBoundingClientRect().bottom);
-    if(inset<=0||inset===previous)return;
-    document.documentElement.style.setProperty('--topbar-inset',inset+'px');
-    previous=inset;
+    const rect=topbar.getBoundingClientRect();
+    const inset=Math.ceil(rect.bottom);
+    if(inset<=0)return;
+    if(inset!==previous){
+      document.documentElement.style.setProperty('--topbar-inset',inset+'px');
+      previous=inset;
+    }
+    if(rect.width!==previousWidth){
+      previousWidth=rect.width;
+      topbar.querySelector('.tabs .is-on')?.scrollIntoView({block:'nearest',inline:'nearest'});
+    }
   };
   update();
   if(typeof ResizeObserver==='function')new ResizeObserver(update).observe(topbar);
@@ -64,8 +71,7 @@ try{
   registerView(sharingView);
   registerView(wikiView);
   registerView(quirqView);
-  registerView(secretsView);
-  registerView(connectorsView);
+  createSetupViews(connectorsView).forEach(registerView);
   startRegistry({defaultView:'dashboard'});
 }catch(err){console.error('Space registry failed to start:',err);}
 

@@ -27,6 +27,10 @@ class Handler(SimpleHTTPRequestHandler):
         url = urlsplit(self.path)
         path = unquote(url.path)
         query = parse_qs(url.query)
+        native = fixtures.native_connectors().get(path)
+        if native is not None:
+            self.json_response(native)
+            return
         route = {
             "/xo/space.json": fixtures.graph,
             "/xo/dashboard.json": fixtures.dashboard,
@@ -34,6 +38,13 @@ class Handler(SimpleHTTPRequestHandler):
             "/api/xo-projects/activity": fixtures.activity,
             "/api/xo-projects/timeline": fixtures.timeline,
             "/api/project-sharing/status": fixtures.sharing,
+            "/space/setup/status": lambda: {
+                "checked_at": fixtures.stamp(),
+                "space": {"status": "configured", "id": fixtures.WORKSPACE_ID,
+                          "label": "Review workspace", "owner": "demo-owner"},
+                "xo": {"status": "connected", "user_id": "demo-user"},
+                "github": {"status": "connected", "username": "demo-developer", "source": "connector"},
+            },
             "/space/server/status": lambda: {"running": True},
             "/api/inbox": lambda: {"items": [], "counts": {"new": 3, "seen": 1, "done": 2, "open": 4}, "total": 0},
             "/api/connections": lambda: {"signed_in": False, "poller_enabled": True, "connections": []},
@@ -50,7 +61,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route:
             self.json_response(route())
             return
-        match = re.fullmatch(r"/api/xo-projects/([^/]+)/(tree|todos|activity|timeline|file|file-history|commits|members|github/issues)", path)
+        match = re.fullmatch(r"/api/xo-projects/([^/]+)/(tree|todos|activity|timeline|file|file-history|commits|members|removal|github/issues)", path)
         if match and match[1] in {p[0] for p in fixtures.PROJECTS}:
             pid, operation = match.groups()
             relative = query.get("relative_path", [""])[0]
@@ -62,6 +73,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "file": lambda: fixtures.file_payload(pid, relative, query.get("commit")),
                 "file-history": lambda: {"project_id": pid, "relative_path": relative, "is_repo": True, "items": fixtures.commits(pid)["commits"]},
                 "commits": lambda: fixtures.commits(pid),
+                "removal": lambda: fixtures.project_removal(pid),
                 "members": lambda: {"own_workspace_id": fixtures.WORKSPACE_ID, "members": [
                     {"workspace_id": fixtures.WORKSPACE_ID, "role": "owner", "status": "active", "bound": True},
                     {"workspace_id": "demo-workspace-summit", "role": "member", "status": "active", "bound": True}]},

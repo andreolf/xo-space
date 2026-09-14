@@ -29,11 +29,11 @@ expanded project screenshots, 320px and 375px screenshots, and `report.json`.
 the old interface. The browser fixes relative timestamps and seeds graph
 layout randomness; images are unmodified captures of the rendered app.
 
-The full check verifies the six-tab order, Dashboard default, all five
+The full check verifies the four-tab order, Dashboard default, all six
 lenses and existing hash routes, stationary lens controls, retention of an
 open historical file in source mode across lens switches (including real
 Dashboard/Graph dataset reloads), closing the preview when leaving Projects,
-the local Wiki resource and its deep link, number keys 1–6, and lens-switch
+the local Wiki resource and its deep link, number keys 1–4, and lens-switch
 position relative to the content at 320px and 375px (the contextual toolbar
 can change the mobile header height). It fails
 on console errors, uncaught page errors and unsuccessful HTTP responses.
@@ -56,16 +56,39 @@ and hiding search on session charts/detail. No real Inbox data is modified.
 This is a browser regression check of the frontend and its API contracts.
 The fixture server is deliberately not a substitute for backend tests.
 
-## Setup Commands and restart
+## Guided Setup, Commands and restart
 
 With the read-only fixture above running, exercise Commands, restart UI states,
 save/poll races, validation conflicts, and desktop/mobile layouts:
 
 ```sh
+node tests/space_ui_preview/setup-state.mjs
+node tests/space_ui_preview/setup-journey.mjs /tmp/space-setup-journey
+node tests/space_ui_preview/setup-connectors.mjs /tmp/space-setup-connectors
+node tests/space_ui_preview/setup-projects.mjs /tmp/space-setup-projects
+node tests/space_ui_preview/native-connectors.mjs /tmp/space-native-connectors
+node tests/space_ui_preview/setup-identity.mjs /tmp/space-setup-identity
 node tests/space_ui_preview/commands-restart.mjs /tmp/space-commands-review
 node tests/space_ui_preview/inbox-jobs.mjs /tmp/space-inbox-jobs-review
 node tests/space_ui_preview/command-results-races.mjs
 ```
+
+The Setup journey check covers section/Next navigation, selected-agent access,
+separate Secrets management, masked values, independent Agent/Activity saves, drafts during slow initial
+loads and refresh/save races, unavailable status, and desktop/mobile layouts.
+All settings and credential writes use fictional browser fixtures. The pure
+state check covers pending-change priority and factual summaries without
+inferring authentication or live activity from installation checks.
+
+The project check covers Git cloning, individual access revocation, local-roster
+removal, typed deletion confirmation, stale replies, changed memberships, retained
+drafts and refreshed project lists. The read-only preview shows a shared removal
+review for Aurora Console; browser tests intercept all project mutations. Backend
+tests separately exercise file deletion and clone publication in temporary folders.
+
+The Setup Connectors check covers lazy loading, legacy links, shared navigation,
+retained search and polling drafts, authorization during section changes, and
+desktop/mobile layouts. Connector requests use browser fixtures. The identity check covers verified, unavailable and unconfigured accounts, independent error states and refresh races.
 
 The Commands/restart script intercepts mutations with browser fixtures; it never executes a
 command or restarts a process. It checks that all three restart buttons wait for

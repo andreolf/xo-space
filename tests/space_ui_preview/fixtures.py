@@ -36,6 +36,22 @@ def stamp(minutes=0):
     return (NOW - timedelta(minutes=minutes)).isoformat().replace("+00:00", "Z")
 
 
+def native_connectors():
+    """Read-only connection examples; never use real credentials or sessions."""
+    return {
+        "/api/connectors/github/status": {"status": "connected", "username": "demo-developer", "auth_method": "pat"},
+        "/api/connectors/magicpath/status": {
+            "skill_installed": True, "cli_installed": True, "cli_version": "1.0.0",
+            "logged_in": False, "user": None,
+        },
+        "/api/connectors/vercel/status": {"status": "needs_auth"},
+        "/api/connectors/gdrive/remotes": {"remotes": [
+            {"name": "design-files", "type": "drive", "scope": "drive.file", "complete": True},
+        ]},
+        "/api/connectors/onedrive/remotes": {"remotes": []},
+    }
+
+
 def catalog():
     return {"items": [
         {"id": pid, "display_name": name, "description": description,
@@ -43,6 +59,21 @@ def catalog():
          "unscaffolded": False}
         for i, (pid, name, description, *_rest) in enumerate(PROJECTS)
     ]}
+
+
+def project_removal(project_id):
+    """Fictional access review only; the preview never removes project files."""
+    shared = project_id == "aurora-console"
+    members = [{"workspace_id": WORKSPACE_ID, "role": "owner", "status": "active",
+                "is_self": True, "can_revoke": False}]
+    if shared:
+        members.extend({"workspace_id": workspace, "role": "member", "status": "active",
+                        "is_self": False, "can_revoke": True}
+                       for workspace in ("demo-workspace-summit", "demo-workspace-coast"))
+    return {"project_id": project_id, "can_remove": not shared,
+            "repo": f"github.com/fictional-workspace/{project_id}", "members": members,
+            "peers": [], "blockers": [{"code": "shared_project",
+                "message": "Revoke access for every other Space before removing this project."}] if shared else []}
 
 
 def paths_for(project):
