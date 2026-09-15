@@ -94,6 +94,7 @@ directly. Descended from the single-file xo-atlas `v3.html`.
 |------|------------|
 | `index.html` | Thin shell: markup + stylesheet links + an import map + the `js/app.js` entry. The import map is where `core/api.js`, `core/ui.js` and `core/connections.js` get their cache stamp: views import those three bare, the map rewrites every such import to one `?v=` URL (one module instance, fetched fresh after a bump); every other core module keeps the stamp on its import line. |
 | `css/` | The original stylesheet split at its section banners, loaded in original order (cascade unchanged). |
+| `fonts/inter/` | Inter variable font (upright and italic) with its SIL OFL license. `css/base.css` loads it as `--sans`; `--mono` stays the system monospace and is only for code, commands, logs and IDs. |
 | `js/app.js` | Entry point. Registers views; **adding a view = one new file in `js/views/` + one import line here.** |
 | `js/core/registry.js` | View registry: primary section links, `1..n` hotkeys (ignored while editing), canonical hash routes and aliases, history, lazy mounts, per-view refresh and failure isolation. Primary sections are configured independently of their pages. |
 | `js/core/navigation.js` | Primary sections and their page definitions, canonical routes, labels and stable view IDs. |

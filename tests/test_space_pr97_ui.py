@@ -898,45 +898,36 @@ class ShellTests(unittest.TestCase):
         # Trends absorbing Tools and Models changed navigation.js, so every
         # importer of the vocabulary moved to the agents stamp.
         agents_stamp = "20260915-agents2"
-        for view in ("sessions", "atlas", "tree", "inbox", "sharing", "projects", "inbox-activity", "project-manage"):
+        for view in ("tree", "inbox", "sharing", "projects", "inbox-activity", "project-manage"):
             self.assertIn("./views/" + view + ".js?v=" + agents_stamp + "'", app)
         for module in ("section-nav", "navigation", "preview"):
             self.assertIn("./core/" + module + ".js?v=" + agents_stamp + "'", app)
         for view in ("wiki", "quirq"):
             self.assertIn("./views/" + view + ".js?v=20260915-data1'", app)
-        # the Cmd+K palette landed alongside; atlas took the agents stamp as
-        # the later of the two changes
+        # the Cmd+K palette landed alongside
         self.assertIn("./core/command-palette.js?v=20260915-cmdk4'", app)
-        self.assertIn("./core/registry.js?v=20260914-actions1'", app)
-        # toolbar advanced with the Cmd+K palette (navbar trigger + `/` handoff)
+        # The typography pass (Inter, readable small text) restamped every file
+        # it changed on top of development.
+        type_stamp = "20260915-typesync1"
+        self.assertIn("./core/registry.js?v=" + type_stamp + "'", app)
+        # Restoring the footer (and dropping the graph's duplicate counts line)
+        # moved these again; toolbar.js is back to development's copy.
+        footer_stamp = "20260915-footer1"
+        for module in ("views/sessions", "views/atlas", "views/setup"):
+            self.assertIn("./" + module + ".js?v=" + footer_stamp + "'", app)
         self.assertIn("./core/toolbar.js?v=20260915-cmdk6'", app)
-        # setup.js advanced with the copied agent skill and First run at
-        controls_stamp = "20260915-skillprompt1"
-        self.assertIn("./views/setup.js?v=" + controls_stamp + "'", app)
         self.assertIn("./core/project-actions.js?v=20260914-details1'", app)
-        compact_stamp = "20260914-projectcompact1"
         self.assertIn("./views/connectors.js?v=20260914-setupapps1'", app)
-        results_stamp = "20260914-navigation1"
         html = read("index.html")
-        self.assertIn('href="css/projects.css?v=20260915-data1"', html)
-        self.assertIn('href="css/navigation.css?v=20260915-timeline1"', html)
-        for sheet in ("project-share",):
-            self.assertIn('href="css/' + sheet + '.css?v=20260914-inboxshare1"', html)
-        # setup.css did not change with the copied-skill prompt in setup.js.
-        for sheet in ("setup",):
-            self.assertIn('href="css/' + sheet + '.css?v=20260914-manage1"', html)
-        self.assertIn('href="css/project-management.css?v=20260915-data1"', html)
-        for sheet in ("inbox-activity",):
-            self.assertIn('href="css/' + sheet + '.css?v=20260914-details1"', html)
-        for sheet in ("graph", "preview"):
-            self.assertIn('href="css/' + sheet + '.css?v=' + compact_stamp + '"', html)
+        for sheet in ("projects", "project-management", "inbox-activity",
+                      "inbox", "setup", "connectors", "sessions", "shadcn", "command-palette"):
+            self.assertIn('<link rel="stylesheet" href="css/' + sheet + '.css?v=' + type_stamp + '">', html)
+        for sheet in ("base", "chrome", "graph", "preview", "navigation"):
+            self.assertIn('<link rel="stylesheet" href="css/' + sheet + '.css?v=' + footer_stamp + '">', html)
+        self.assertIn('<link rel="stylesheet" href="css/project-share.css?v=20260914-inboxshare1">', html)
         # Later view changes legitimately advance the shell and Wiki stamps;
         # test_space_wiki checks that the cache-bust chain stays intact.
         self.assertRegex(html, r'src="js/app\.js\?v=\d{8}-[a-z0-9]+"')
-        # Inbox's Jobs/results styles advanced with its view; the connector
-        # stylesheet advances for the embedded Setup section.
-        for sheet, stamp in (("inbox", results_stamp), ("connectors", "20260914-setupapps1")):
-            self.assertIn('<link rel="stylesheet" href="css/' + sheet + '.css?v=' + stamp + '">', html)
 
     def test_import_map_stamps_the_bare_core_modules(self) -> None:
         """core/api.js and core/ui.js gained exports and are imported bare
