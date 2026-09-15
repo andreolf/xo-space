@@ -13,13 +13,10 @@ def read(rel: str) -> str:
 
 
 class SpaceProjectSharingCompositionTests(unittest.TestCase):
-    """Project sharing in the Space UI is ONE surface: the Sharing lens of the
-    Files tab (views/sharing.js painting, views/sharing_data.js talking to the
-    BFF). The List lens carries none of it. These assertions pin the seams so
-    a refactor cannot quietly grow a second sharing surface, drop a control,
-    or route a call around the BFF."""
+    """Inbox Sharing owns relay management. List rows offer only the reusable
+    inline grant form; all sharing operations continue through the BFF."""
 
-    def test_list_lens_carries_no_sharing_surface(self) -> None:
+    def test_list_rows_do_not_duplicate_the_sharing_management_pane(self) -> None:
         projects = read("js/views/projects.js")
         for needle in ("sharing_data.js", "projects_sharing.js", "sharingPanel", "shr-",
                        "sharingStripHTML", "sharedWithYouHTML", "startSharingPoll", "data-shr-row"):
@@ -93,7 +90,7 @@ class SpaceProjectSharingCompositionTests(unittest.TestCase):
         self.assertIn("async function doApply(id)", pane)
         self.assertIn("'applied '+plural(n,'commit')", pane)
         self.assertIn("data-act=\"check\"", pane)
-        self.assertIn("async function doCheck(btn)", pane)
+        self.assertIn("async function doCheck()", pane)
         self.assertIn("copy invite", pane)
         self.assertIn("export function inviteText()", data)
         self.assertIn("export function applyCmd(path,branch)", data)
@@ -126,7 +123,8 @@ class SpaceProjectSharingCompositionTests(unittest.TestCase):
         self.assertIn("const subscribers=new Set()", data)
         self.assertIn("projects-sharing-fast", data)      # faster poll only while cloning
         # a poll tick never wipes a half-typed composer or a pending revoke
-        self.assertIn("const editing=()=>!!composer||!!confirmRevoke;", pane)
+        self.assertIn("function editing()", pane)
+        self.assertIn("!!composer||!!confirmRevoke||sharePending", pane)
         self.assertIn("if(editing()){", pane)
 
     def test_stylesheet_and_module_are_cache_busted(self) -> None:

@@ -1,4 +1,6 @@
-/* Sharing: the fourth Files lens, and the whole of project sharing in the
+import {INBOX_PAGES} from '../core/navigation.js?v=20260915-data1';
+import {setSectionActions} from '../core/section-nav.js?v=20260915-data1';
+/* Sharing: the project-sharing page in the
    Space UI (issue #83). Designed around the loop, not a layout: share once,
    then commits flow and each side applies.
 
@@ -19,15 +21,17 @@
    calls); this file only paints and handles events. One delegated click /
    submit / input listener on the section: the pane re-renders from state,
    so nothing is bound per element. */
+import {openProjectAdd} from '../core/project-actions.js?v=20260914-details1';
 import {toast} from '../core/ui.js';
 import {esc,rel,shortId,shortHash,sharingStatus,sharingStatusRes,refreshSharingStatus,
   startSharingPoll,refreshSoon,consumeNewClone,REASON,parked,memberState,entryFor,repos,
   cloneCmd,applyCmd,inviteText,fetchCatalog,fetchCommits,fetchMembers,share,revoke,apply,
-  checkNow,failText} from './sharing_data.js?v=20260914-projectmanage1';
+  checkNow,failText} from './sharing_data.js?v=20260914-inboxshare1';
 
 const plural=(n,word)=>n.toLocaleString()+' '+word+(n===1?'':'s');
 
 let root=null;
+let pageActions=null,shareButton=null,checkButton=null,checking=false;
 let go=()=>{};            /* ctx.switchTo, captured on mount */
 let names=new Map();      /* project id -> display name, from the catalog */
 let catalog=[];           /* every project, for the composer's picker */
@@ -35,6 +39,7 @@ let commits=new Map();    /* project id -> {ok,behind,branch,path,commits,error}
 let members=new Map();    /* project id -> {ok,own,members,error} */
 let open=null;            /* the expanded card's project id */
 let composer=null;        /* null | {pick,filter,ws} */
+let sharePending=false;   /* keep the active share form until its request settles */
 let busy=new Set();       /* project ids with a write in flight */
 let confirmRevoke=null;   /* {id,ws} while a revoke waits for Confirm */
 let renderedAt=0;
@@ -43,13 +48,20 @@ addEventListener('space:projects-changed',()=>{catalogDirty=true;});
 addEventListener('space:project-access-changed',()=>{catalogDirty=true;members.clear();});
 
 export default {
-  /* No tab of its own: the Files tab owns the nav slot and this is its
-     fourth lens, reached from the List | Graph | Tree | Sharing pill (or
-     #/sharing). */
-  id:'sharing',label:'Sharing',order:4,nav:false,parent:'projects',
+  /* Sharing keeps its own mounted section within the Inbox navigation. */
+  ...INBOX_PAGES.find(page=>page.id==='sharing'),
+  section:'sharing',
   async mount(el,ctx){
     root=el;
     go=ctx.switchTo;
+    if(!pageActions){
+      pageActions=document.createElement('div');pageActions.className='sharing-page-actions';
+      pageActions.innerHTML='<button class="sess-refresh shl-primary" type="button" data-act="composer">+ Share a project</button>'
+        +'<button class="sess-refresh" type="button" data-act="check" title="Ask the relay to check now instead of waiting for the next minute">Check now</button>';
+      shareButton=pageActions.querySelector('[data-act="composer"]');checkButton=pageActions.querySelector('[data-act="check"]');
+      pageActions.addEventListener('click',onClick);
+    }
+    renderActions();setSectionActions('sharing',pageActions);
     el.innerHTML='<div class="prj shl">'+skeleton()+'</div>';
     root.addEventListener('click',onClick);
     root.addEventListener('submit',onSubmit);
@@ -61,7 +73,8 @@ export default {
   },
   /* Coming back to the lens re-reads; right after mount the paint is fresh
      and a second read would only repeat it. */
-  show(){if(root&&(catalogDirty||Date.now()-renderedAt>2000)){catalogDirty=false;refresh();}}
+  show(){if(root&&(catalogDirty||Date.now()-renderedAt>2000)){catalogDirty=false;return refresh();}},
+  refresh,
 };
 
 const skeleton=()=>'<div class="prj-head"></div><div class="prj-rows">'
@@ -98,8 +111,8 @@ async function loadMembers(id){
 }
 async function refresh(){
   await Promise.all([loadCatalog(),refreshSharingStatus()]);
-  render();
-  loadCommits();
+  paintSnapshot();
+  await loadCommits();
 }
 /* A poll tick repaints everything unless the person is mid-edit (composer
    open, a revoke waiting for Confirm): then only the strip and the eyebrow
@@ -107,15 +120,24 @@ async function refresh(){
 function onStatus(){
   if(!root)return;
   if(consumeNewClone())loadCatalog().then(()=>{if(!editing())render();});
+  paintSnapshot();
+  loadCommits();
+}
+function paintSnapshot(){
+  if(!root)return;
+  renderActions();
   if(editing()){
     const strip=root.querySelector('#prj-sharing-strip');
     if(strip)strip.outerHTML=stripHTML();
     const count=root.querySelector('#shl-count');
     if(count)count.textContent=summary(model());
   }else render();
-  loadCommits();
 }
-const editing=()=>!!composer||!!confirmRevoke;
+function editing(){
+  const recipient=root?.querySelector('form[data-form="share"] input[name="ws"]');
+  return !!composer||!!confirmRevoke||sharePending
+    ||!!recipient&&(!!recipient.value||document.activeElement===recipient);
+}
 /* the open card's detail: commits are already loading; members only when
    the relay says the repo is live */
 function ensureDetail(id){
@@ -153,6 +175,7 @@ const actionable=m=>m.filter(r=>r.need&&r.need!=='cloning');
 /* ── paint ────────────────────────────────────────────────────────────── */
 function render(){
   if(!root)return;
+  renderActions();
   const m=model();
   root.querySelector('.prj').innerHTML=headHTML(m)+stripHTML()+bodyHTML(m);
   renderedAt=Date.now();
@@ -168,15 +191,17 @@ function summary(m){
   return mine+' shared'+(inc?' · '+inc+' incoming':'')+(need?' · '+need+' need you':' · all in sync');
 }
 function headHTML(m){
-  const off=parked()||!sharingStatusRes()||!sharingStatusRes().ok;
   return'<div class="prj-head">'
     +'<span class="prj-eyebrow" id="shl-count">'+esc(summary(m))+'</span>'
-    +'<span class="prj-spacer"></span>'
-    +(composer
-      ?'<button class="sess-refresh" type="button" data-act="composer">Cancel</button>'
-      :'<button class="sess-refresh shl-primary" type="button" data-act="composer"'+(off?' disabled':'')+'>+ Share a project</button>')
-    +'<button class="sess-refresh" type="button" data-act="check" title="Ask the relay to check now instead of waiting for the next minute"'+(off?' disabled':'')+'>Check now</button>'
   +'</div>';
+}
+function renderActions(){
+  if(!pageActions)return;
+  const status=sharingStatusRes(),off=parked()||!status||!status.ok;
+  shareButton.textContent=composer?'Cancel':'+ Share a project';
+  shareButton.classList.toggle('shl-primary',!composer);shareButton.disabled=sharePending||(!composer&&off);
+  checkButton.disabled=off||checking;checkButton.textContent=checking?'Checking…':'Check now';
+  if(checking)checkButton.setAttribute('aria-busy','true');else checkButton.removeAttribute('aria-busy');
 }
 function stripHTML(){
   const status=sharingStatus(),res=sharingStatusRes();
@@ -210,7 +235,7 @@ function inboxRow(r){
   if(r.need==='restore'){
     what='removed from this Space';
     why='automatic cloning is paused';
-    acts='<button class="sess-refresh is-sm" type="button" data-act="restore">Clone in Setup</button>';
+    acts='<button class="sess-refresh is-sm" type="button" data-act="restore">Clone project</button>';
   }else if(r.need==='auth'){
     what='private repo · needs GitHub';
     why='connect GitHub once; XO Space clones it on the next check';
@@ -459,7 +484,7 @@ function composerHTML(){
       +'<div class="shr-form" style="margin-top:0">'
         +'<input class="tv-filter shr-input" name="ws" placeholder="recipient workspace id" autocomplete="off" spellcheck="false" '
           +'aria-label="Recipient workspace id" value="'+esc(composer.ws||'')+'">'
-        +'<button class="sess-refresh shl-primary" type="submit" id="shl-composer-go"'+(composer.pick?'':' disabled')+'>'
+        +'<button class="sess-refresh shl-primary" type="submit" id="shl-composer-go"'+(composer.pick&&!sharePending?'':' disabled')+'>'
           +(name?'Share '+esc(name):'Share')+'</button>'
       +'</div>'
       +'<span class="shr-muted">Ask them for the id from the strip on their own Sharing pane, or send them your invite and let them share with you. Sharing again with someone who already has it does nothing.</span>'
@@ -478,17 +503,19 @@ async function onClick(e){
   const id=b.dataset.id;
   switch(b.dataset.act){
     case'composer':
+      if(sharePending)return;
       composer=composer?null:{pick:null,filter:'',ws:''};
       confirmRevoke=null;
       render();
       if(composer){const f=root.querySelector('[data-filter]');if(f)f.focus();}
       return;
-    case'check':return doCheck(b);
+    case'check':return doCheck();
     case'copy':
       try{await navigator.clipboard.writeText(b.dataset.copy);toast(b.textContent.trim()==='copy invite'?'invite copied':'copied');}
       catch(err){toast('copy failed: select and copy by hand');}
       return;
     case'select':
+      if(sharePending)return;
       open=id;
       confirmRevoke=null;
       composer=null; /* picking a project answers "what do you want to see" */
@@ -497,16 +524,15 @@ async function onClick(e){
     case'apply':return doApply(id);
     case'connect':return go('setup/connectors');
     case'restore':
-      await go('setup/projects');
-      if(location.hash==='#/setup/projects')dispatchEvent(new CustomEvent('space:setup-section',{detail:{panel:'projects'}}));
-      return;
+      return openProjectAdd(go);
     case'list':
       /* views never import each other: switch to List and tell it which
          drawer to open; it parks the request until its catalog is loaded */
-      go('projects');
+      go('projects/data/list');
       dispatchEvent(new CustomEvent('space:open-project',{detail:id}));
       return;
     case'pick':
+      if(sharePending)return;
       composer.pick=composer.pick===id?null:id;
       keepComposerInput();
       paintComposer();
@@ -540,6 +566,8 @@ function onSubmit(e){
   }
 }
 function onInput(e){
+  const recipient=e.target.closest('input[name="ws"]');
+  if(composer&&recipient)composer.ws=recipient.value;
   const f=e.target.closest('[data-filter]');
   if(f&&composer){
     composer.filter=f.value;
@@ -550,11 +578,24 @@ function onInput(e){
 
 /* ── writes ───────────────────────────────────────────────────────────── */
 async function doShare(id,ws,form,fromComposer){
+  if(sharePending)return;
+  if(fromComposer&&!catalog.some(project=>project.id===id)){
+    toast('This project is no longer in the project list. Choose another project.');
+    return;
+  }
   if(!ws){toast('enter the recipient’s workspace id');form.querySelector('input[name=ws]').focus();return;}
   const btn=form.querySelector('button[type=submit]');
-  btn.disabled=true;
-  const res=await share(id,ws);
-  btn.disabled=false;
+  sharePending=true;btn.disabled=true;renderActions();
+  let res;
+  try{res=await share(id,ws);}
+  finally{
+    sharePending=false;btn.disabled=false;
+    /* A concurrent action may have painted a new composer while this POST
+       was pending. Restore the live button as well as the original node. */
+    const current=root?.querySelector('#shl-composer-go');
+    if(current)current.disabled=!composer?.pick||!catalog.some(project=>project.id===composer.pick);
+    renderActions();
+  }
   if(!res.ok){toast('share failed: '+failText(res));return;}
   toast('shared '+(names.get(id)||id)+' with '+shortId(ws));
   members.delete(id);
@@ -590,12 +631,19 @@ async function doApply(id){
   render();
   refreshSoon().then(()=>{if(!editing())render();});
 }
-async function doCheck(btn){
-  btn.disabled=true;
-  const res=await checkNow();
-  if(!res.ok){btn.disabled=false;toast('check failed: '+failText(res));return;}
-  toast('checking…');
-  await refreshSoon(1800);
-  if(!editing())render();
-  loadCommits();
+async function doCheck(){
+  if(checking)return;
+  const restoreFocus=document.activeElement===checkButton;
+  checking=true;renderActions();
+  try{
+    const res=await checkNow();
+    if(!res.ok){toast('check failed: '+failText(res));return;}
+    toast('checking…');
+    await refreshSoon(1800);
+    if(!editing())render();
+    loadCommits();
+  }finally{
+    checking=false;renderActions();
+    if(restoreFocus&&!checkButton.disabled&&root.classList.contains('is-active')&&document.activeElement===document.body)checkButton.focus({preventScroll:true});
+  }
 }
