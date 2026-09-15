@@ -910,7 +910,8 @@ class ShellTests(unittest.TestCase):
         self.assertIn("./core/registry.js?v=20260914-actions1'", app)
         # toolbar advanced with the Cmd+K palette (navbar trigger + `/` handoff)
         self.assertIn("./core/toolbar.js?v=20260915-cmdk6'", app)
-        controls_stamp = "20260914-manage1"
+        # setup.js advanced with the copied agent skill and First run at
+        controls_stamp = "20260915-skillprompt1"
         self.assertIn("./views/setup.js?v=" + controls_stamp + "'", app)
         self.assertIn("./core/project-actions.js?v=20260914-details1'", app)
         compact_stamp = "20260914-projectcompact1"
@@ -921,8 +922,9 @@ class ShellTests(unittest.TestCase):
         self.assertIn('href="css/navigation.css?v=20260915-timeline1"', html)
         for sheet in ("project-share",):
             self.assertIn('href="css/' + sheet + '.css?v=20260914-inboxshare1"', html)
+        # setup.css did not change with the copied-skill prompt in setup.js.
         for sheet in ("setup",):
-            self.assertIn('href="css/' + sheet + '.css?v=' + controls_stamp + '"', html)
+            self.assertIn('href="css/' + sheet + '.css?v=20260914-manage1"', html)
         self.assertIn('href="css/project-management.css?v=20260915-data1"', html)
         for sheet in ("inbox-activity",):
             self.assertIn('href="css/' + sheet + '.css?v=20260914-details1"', html)
