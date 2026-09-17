@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from services.cowork_agent.local_state import quirq_state_dir
+from utils import runtime_env
 from utils.commands import scheduler
 
 PY = sys.executable
@@ -81,8 +82,9 @@ class SchedulerTests(unittest.TestCase):
     # ── Task 1: validation and the store ──
 
     def test_state_root_is_the_one_local_state_exposes(self) -> None:
-        # One definition (utils/runtime_env.py), re-exported by local_state.
-        self.assertIs(scheduler.quirq_state_dir, quirq_state_dir)
+        # One definition each (utils/runtime_env.py): the state root, re-exported
+        # by local_state, and the scheduler's folder beneath it.
+        self.assertIs(scheduler.scheduler_dir, runtime_env.scheduler_dir)
         self.assertEqual(scheduler.scheduler_dir(), quirq_state_dir() / "scheduler")
 
     def test_create_validates_writes_both_files_and_schedules_one_interval_out(self) -> None:
@@ -124,7 +126,6 @@ class SchedulerTests(unittest.TestCase):
             ({**_job(), "first_run_at": "next monday"}, "iso-8601"),
             ({**_job(), "first_run_at": ""}, "iso-8601"),
             ({**_job(), "first_run_at": 1234}, "iso-8601"),
-            ({**_job(), "every_seconds": None, "first_run_at": "2026-09-14T13:30:00Z"}, "manual-only"),
             ("not an object", "object"),
         ]
         for payload, needle in bad:
@@ -195,6 +196,33 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(job2["next_run"], "2026-09-11T10:00:00Z")
         self.assertEqual(scheduler.tick(now=T0).started, [job2["id"]])
         scheduler._running[job2["id"]].thread.join(10)
+
+    def test_a_one_time_job_runs_once_at_its_time_and_then_waits(self) -> None:
+        # every_seconds null + first_run_at: run once at that instant, then
+        # stay registered (history kept) until Run now or a new time.
+        job = scheduler.create_job(_job("once", None, first_run_at="2026-09-11T10:30:00Z"), now=T0)
+        self.assertIsNone(job["every_seconds"])
+        self.assertEqual(job["next_run"], "2026-09-11T10:30:00Z")
+        self.assertTrue(scheduler.tick(now=_at(1799)).quiet)
+        self.assertEqual(scheduler.tick(now=_at(1800)).started, [job["id"]])
+        self.assertIsNone(self._state(job["id"])["next_run"])   # cleared before launch
+        scheduler._running[job["id"]].thread.join(10)
+        self.assertEqual(scheduler.tick(now=_at(1801)).finished, [job["id"]])
+        self.assertTrue(scheduler.tick(now=_at(90000)).quiet)
+        self.assertEqual(scheduler.get_job(job["id"])["last_result"]["trigger"], "schedule")
+        # Saving it unchanged does not run it again; a new time does.
+        same = scheduler.update_job(
+            job["id"], _job("once renamed", None, first_run_at="2026-09-11T10:30:00Z"), now=_at(3600)
+        )
+        self.assertIsNone(same["next_run"])
+        moved = scheduler.update_job(
+            job["id"], _job("once", None, first_run_at="2026-09-12T09:00:00Z"), now=_at(3600)
+        )
+        self.assertEqual(moved["next_run"], "2026-09-12T09:00:00Z")
+        # Without first_run_at it is manual only and never ticks.
+        manual = scheduler.update_job(job["id"], _job("once", None), now=_at(3600))
+        self.assertIsNone(manual["next_run"])
+        self.assertTrue(scheduler.tick(now=_at(200000)).quiet)
 
     def test_without_first_run_at_the_first_run_is_one_interval_out(self) -> None:
         job = scheduler.create_job(_job("plain", 600), now=T0)

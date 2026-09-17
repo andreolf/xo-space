@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import socket
 import tempfile
 import time
@@ -14,16 +15,31 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-from routers import space
+from routers import browser_guard, space
 from routers.cowork_agent.runtime_config import router as runtime_router
 from services.cowork_agent import runtime_config
 from utils.commands import CommandResult, run_sync
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _processes_started_in(directory: Path) -> list[int]:
+    """PIDs whose working directory is ``directory``: what a fixture launched there."""
+    target = os.path.realpath(directory)
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if os.readlink(entry / 'cwd') == target:
+                found.append(int(entry.name))
+        except OSError:
+            continue
+    return found
 
 
 class RestartModeTests(unittest.TestCase):
@@ -135,17 +151,44 @@ class RestartRouteTests(unittest.TestCase):
             'Origin': 'http://attacker.example',
         }).status_code, 403)
 
+    def test_restart_accepts_a_browser_behind_a_tls_proxy(self):
+        public = 'space.workspace.example.com'
+        client = TestClient(self.app, base_url=f'http://{public}', client=('127.0.0.1', 12345))
+        headers = {'Origin': f'https://{public}', 'Sec-Fetch-Site': 'same-origin'}
+        with patch.object(runtime_config, 'restart_mode', return_value='foreground'):
+            for route in ('/space/server/restart', '/api/runtime-config/restart'):
+                with self.subTest(route=route):
+                    # 409 is the foreground-mode refusal: the guard let it through.
+                    self.assertEqual(client.post(route, headers=headers).status_code, 409)
+
+    def test_update_apply_refuses_cross_site_browsers(self):
+        client = TestClient(self.app, base_url='http://localhost:5002', client=('127.0.0.1', 12345))
+        with patch('services.cowork_agent.self_update.apply_update', return_value={'ok': True}) as apply:
+            self.assertEqual(client.post('/space/update/apply', headers={'Origin': 'https://evil.example'}).status_code, 403)
+            apply.assert_not_called()
+            self.assertEqual(client.post('/space/update/apply').status_code, 200, 'CLI needs no Origin')
+
     def test_local_origin_uses_effective_port_and_ipv6(self):
         def request(host, origin, scheme='http'):
             return Request({'type': 'http', 'scheme': scheme, 'path': '/',
                             'headers': [(b'host', host.encode()), (b'origin', origin.encode())],
                             'client': ('::1', 1), 'server': ('::1', 80)})
-        self.assertTrue(space._is_local_mutation(request('localhost', 'http://localhost:80')))
-        self.assertTrue(space._is_local_mutation(request('[::1]:5002', 'http://[::1]:5002')))
-        self.assertFalse(space._is_local_mutation(request('localhost', 'http://localhost:0')))
+        self.assertTrue(browser_guard.is_local_mutation(request('localhost', 'http://localhost:80')))
+        self.assertTrue(browser_guard.is_local_mutation(request('[::1]:5002', 'http://[::1]:5002')))
+        self.assertFalse(browser_guard.is_local_mutation(request('localhost', 'http://localhost:0')))
 
 
 class ManagedRestartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_refuses_cross_site_browsers(self):
+        request = Request({'type': 'http', 'scheme': 'http', 'path': '/space/server/stop',
+                           'headers': [(b'host', b'localhost:5002'), (b'origin', b'https://evil.example')],
+                           'client': ('127.0.0.1', 1), 'server': ('127.0.0.1', 5002)})
+        with patch('routers.space.os.kill') as kill:
+            with self.assertRaises(HTTPException) as refused:
+                await space.space_server_stop(request)
+            self.assertEqual(refused.exception.status_code, 403)
+            kill.assert_not_called()
+
     async def test_managed_termination_is_deferred_until_after_response(self):
         request = Request({'type': 'http', 'client': ('::1', 12345), 'headers': []})
         sent = []
@@ -170,6 +213,24 @@ class ManagedRestartTests(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipUnless(os.name == 'posix' and shutil.which('pgrep'), 'native process manager needs POSIX and pgrep')
 class NativeRestartIntegrationTests(unittest.TestCase):
+    def _stop_everything_started_in(self, root, runner, env):
+        # A restart requested through the API runs on its own runner, which
+        # holds the process lock until the new server is confirmed up. A stop
+        # sent before that is refused, which is how this test used to leave the
+        # restarted server running. Retry until nothing launched from the
+        # fixture is left, then kill whatever still is.
+        deadline = time.monotonic() + 30
+        while True:
+            run_sync([str(runner), 'stop'], cwd=root, env=env, timeout=20)
+            if not _processes_started_in(root) or time.monotonic() >= deadline:
+                break
+            time.sleep(0.5)
+        for pid in _processes_started_in(root):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
     def test_native_route_restarts_with_a_new_process(self):
         # A miniature install with private pid/lock/log files. Intercept the
         # broad CLI sweep for safety and assert API restart never calls it.
@@ -199,8 +260,11 @@ class NativeRestartIntegrationTests(unittest.TestCase):
                 'app = FastAPI()\napp.include_router(router)\n'
                 f'uvicorn.run(app, host="127.0.0.1", port={port}, log_level="error")\n'
             )
+            # Private roots: the fixture server must never read or write the
+            # developer's real state root or projects.
             env = {**os.environ, 'PORT': str(port), 'HOST': '127.0.0.1',
-                   'QUIRQ_MANAGED_CONTAINER': '0', 'UVICORN_RELOAD': '0'}
+                   'QUIRQ_MANAGED_CONTAINER': '0', 'UVICORN_RELOAD': '0',
+                   'QUIRQ_STATE_ROOT': str(root / 'state'), 'XO_PROJECTS_ROOT': str(root / 'projects')}
             def status():
                 try:
                     return httpx.get(f'http://127.0.0.1:{port}/space/server/status', timeout=0.5).json()
@@ -245,4 +309,5 @@ class NativeRestartIntegrationTests(unittest.TestCase):
                 self.assertEqual(after['restart_mode'], 'native')
                 self.assertEqual(sweep_file.read_text(), sweeps, 'API restart entered the broad CLI sweep')
             finally:
-                run_sync([str(runner), 'stop'], cwd=root, env=env, timeout=20)
+                self._stop_everything_started_in(root, runner, env)
+            self.assertEqual(_processes_started_in(root), [], 'a server started by this test is still running')

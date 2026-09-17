@@ -18,6 +18,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+
+# Reads no environment at import, so it is safe before the dotenv load below.
+from services.storage.layout import secrets_dir, settings_dir
 from pydantic import BaseModel
 from dotenv import dotenv_values, load_dotenv
 import httpx
@@ -78,8 +81,12 @@ def _load_storage_roots() -> None:
     anchor = Path(
         (os.getenv("QUIRQ_STATE_ROOT", "") or "").strip() or Path.home() / ".quirq"
     ).expanduser()
+    # settings/roots.env since the state root has folders; roots.env before.
+    roots_file = anchor / settings_dir().name / "roots.env"
+    if not roots_file.is_file():
+        roots_file = anchor / "roots.env"
     try:
-        values = dotenv_values(anchor / "roots.env")
+        values = dotenv_values(roots_file)
     except OSError:
         return
     for key in ("XO_PROJECTS_ROOT", "QUIRQ_STATE_ROOT"):
@@ -92,14 +99,33 @@ _load_storage_roots()
 _quirq_state_root = Path(
     (os.getenv("QUIRQ_STATE_ROOT", "") or "").strip() or Path.home() / ".quirq"
 ).expanduser()
-_quirq_runtime_file = (
-    (os.getenv("QUIRQ_RUNTIME_FILE", "") or "").strip()
-    or str(_quirq_state_root / "runtime.env")
+def _settings_file(configured: str, new: Path, old: Path) -> str:
+    """The file to load: the configured path, else its new home. When that is
+    the new home and it does not exist yet, the file from before the state
+    root had folders is read instead: the move into settings/ and secrets/
+    happens in the lifespan (services/storage/layout.py), after this load."""
+    path = Path(configured).expanduser() if configured else new
+    if path == new and not path.is_file() and old.is_file():
+        return str(old)
+    return str(path)
+
+
+_quirq_runtime_file = _settings_file(
+    (os.getenv("QUIRQ_RUNTIME_FILE", "") or "").strip(),
+    settings_dir() / "runtime.env",
+    _quirq_state_root / "runtime.env",
 )
 load_dotenv(_quirq_runtime_file, override=True)
 _quirq_secrets_file = (os.getenv("QUIRQ_SECRETS_FILE", "") or "").strip()
 if _quirq_secrets_file:
-    load_dotenv(_quirq_secrets_file, override=True)
+    load_dotenv(
+        _settings_file(
+            _quirq_secrets_file,
+            secrets_dir() / "secrets.env",
+            _quirq_state_root / "secrets.env",
+        ),
+        override=True,
+    )
 
 from routers.auth.auth import (
     XO_API_KEY,
@@ -589,6 +615,17 @@ async def lifespan(app: FastAPI):
     # so a half-started install is still discoverable.
     _write_install_pointer()
 
+    # Move machine-local files from where earlier releases kept them into the
+    # state root's folders (services/storage/layout.py), before agent setup,
+    # the watcher or any poller reads or writes one. Never raises.
+    try:
+        from services.storage.layout import migrate_layout
+        _layout_moves = migrate_layout()
+        if _layout_moves:
+            print(f"   State layout: moved {len(_layout_moves)} file(s) or folder(s) into place")
+    except Exception as exc:
+        print(f"⚠️ State layout migration skipped (non-fatal): {exc}")
+
     # Boot sweep: drop any orphan Claude-Code mcp.json subdirs left behind
     # by a crash or hard-kill of a previous run. Files there used to carry
     # the Composio session URL + x-api-key; today they only carry the
@@ -896,6 +933,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# X-Forwarded-* is applied here rather than by uvicorn (see uvicorn.run below),
+# after the TCP peer is recorded: the browser guard needs the real peer.
+from routers.browser_guard import add_forwarding_middleware
+add_forwarding_middleware(app)
 app.include_router(xo_auth_session_router)
 app.include_router(auth_router)
 app.include_router(claude_setup_token_router)
@@ -913,6 +954,10 @@ for _r in cowork_agent_routers:
 # Local layer: the command scheduler's API (jobs run by the watcher tick).
 from routers.schedules import router as schedules_router
 app.include_router(schedules_router)
+
+# Space: telemetry source configuration (the Agents tab's Configure page).
+from routers.telemetry_sources import router as telemetry_sources_router
+app.include_router(telemetry_sources_router)
 
 # Space: local workspace knowledge graph (static UI + server control widget).
 from routers.space import router as space_router, mount_space
@@ -1242,6 +1287,8 @@ if __name__ == "__main__":
 
     reload = os.getenv("UVICORN_RELOAD", "").strip().lower() in ("1", "true", "yes")
 
+    # proxy_headers=False: the app applies X-Forwarded-* itself, after
+    # recording the TCP peer (routers/browser_guard.add_forwarding_middleware).
     if reload:
         uvicorn.run(
             "server:app",
@@ -1249,6 +1296,7 @@ if __name__ == "__main__":
             port=port,
             reload=True,
             reload_dirs=[str(Path(__file__).resolve().parent)],
+            proxy_headers=False,
         )
     else:
-        uvicorn.run("server:app", host=host, port=port, reload=False)
+        uvicorn.run("server:app", host=host, port=port, reload=False, proxy_headers=False)

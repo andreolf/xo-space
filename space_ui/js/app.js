@@ -1,26 +1,27 @@
 /* Entry point. Adding a view = create js/views/<name>.js exporting the view
    contract (see core/registry.js), then import + register it here: no
    bundler, so no file globbing; this import list is the one manual step. */
-import {registerView,startRegistry,switchTo,refreshCurrentView} from './core/registry.js?v=20260914-actions1';
+import {registerView,startRegistry,switchTo,refreshCurrentView} from './core/registry.js?v=20260915-typesync1';
 import {initProjectActions} from './core/project-actions.js?v=20260914-details1';
 import {initServerWidget} from './core/server-widget.js?v=20260914-commands2';
-import {initToolbar} from './core/toolbar.js?v=20260914-files2';
-import {initSectionNav} from './core/section-nav.js?v=20260915-data1';
-import {PRIMARY_TABS} from './core/navigation.js?v=20260915-data1';
-import {initPreview} from './core/preview.js?v=20260915-data1';
-import {dashboardView,graphView,timeView,initProjectRootPicker} from './views/atlas.js?v=20260915-timeline1';
-import {createAgentViews} from './views/sessions.js?v=20260915-data1';
-import {createInboxViews,initInboxBadge} from './views/inbox.js?v=20260915-data1';
-import {createActivityViews} from './views/inbox-activity.js?v=20260915-data1';
-import projectsView from './views/projects.js?v=20260915-capfloor5';
-import projectManageView from './views/project-manage.js?v=20260915-data1';
-import treeView from './views/tree.js?v=20260915-data1';
-import sharingView from './views/sharing.js?v=20260915-data1';
+import {initToolbar} from './core/toolbar.js?v=20260915-cmdk6';
+import {initSectionNav} from './core/section-nav.js?v=20260915-agents2';
+import {PRIMARY_TABS} from './core/navigation.js?v=20260915-agents2';
+import {initPreview} from './core/preview.js?v=20260915-agents2';
+import {initCommandPalette} from './core/command-palette.js?v=20260916-jobs3';
+import {dashboardView,graphView,timeView,initProjectRootPicker} from './views/atlas.js?v=20260915-footer1';
+import {createAgentViews} from './views/sessions.js?v=20260915-footer1';
+import {createInboxViews,initInboxBadge} from './views/inbox.js?v=20260916-jobs3';
+import {createActivityViews} from './views/inbox-activity.js?v=20260915-agents2';
+import projectsView from './views/projects.js?v=20260917-capfloor6';
+import projectManageView from './views/project-manage.js?v=20260915-agents2';
+import treeView from './views/tree.js?v=20260915-agents2';
+import sharingView from './views/sharing.js?v=20260915-agents2';
 /* Chat is deliberately hidden from the tab bar: re-import ./views/chat.js
    and register it below to bring the tab back. */
-import wikiView from './views/wiki.js?v=20260915-data1';
+import wikiView from './views/wiki.js?v=20260916-jobs3';
 import quirqView from './views/quirq.js?v=20260915-data1';
-import {createSetupViews} from './views/setup.js?v=20260914-manage1';
+import {createSetupViews} from './views/setup.js?v=20260916-jobs3';
 import connectorsView from './views/connectors.js?v=20260914-setupapps1';
 
 
@@ -86,3 +87,4 @@ try{
 try{initServerWidget();}catch(err){console.error('Server widget failed to start:',err);}
 try{initInboxBadge();}catch(err){console.error('Inbox badge failed to start:',err);}
 try{initPreview();}catch(err){console.error('Previewer failed to start:',err);}
+try{initCommandPalette({switchTo,refreshCurrentView});}catch(err){console.error('Command palette failed to start:',err);}
