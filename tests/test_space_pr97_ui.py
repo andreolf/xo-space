@@ -277,7 +277,8 @@ globalThis.fetch=async(url,opts={})=>{
   calls.push({method,path,body,headers:opts.headers});
   const json=data=>({ok:true,status:200,json:async()=>data});
   if(path==='/xo-auth/session/self')return json({session_id:'s1'});
-  if(path==='/api/connectors/composio/toolkits')return json({toolkits:TOOLKITS});
+  if(path==='/api/connectors/composio/backend')return json({mode:'local',key_source:'file'});
+  if(path==='/api/connectors/composio/toolkits')return json({toolkits:TOOLKITS,key_configured:true,key_source:'file'});
   if(/^\/api\/connectors\/composio\/[^/]+\/tools$/.test(path))return json({tools:[{slug:'send',name:'Send',enabled:true}]});
   if(/^\/api\/connectors\/composio\/[^/]+\/prefs$/.test(path)){
     if(prefsGate)await prefsGate;return json({});
@@ -386,6 +387,12 @@ function cardEl(toolkit){
   return card;
 }
 const alertEl={hidden:true,innerHTML:'',className:''};
+/* the bring-your-own-key panel: its own element with click + keydown listeners
+   (bindEvents) and a nested key input (renderKeyPanel). Models the real #conn-key
+   node added to renderShell. */
+const keyEl={className:'',innerHTML:'',listeners:{},
+  addEventListener(type,fn){(this.listeners[type]=this.listeners[type]||[]).push(fn);},
+  querySelector(sel){if(sel==='#conn-key-input')return null;throw new Error('unstubbed key selector '+sel);}};
 const noMatch={hidden:true,textContent:''};
 const nativeGrid={innerHTML:''};
 const workspaceSection={hidden:false},accountSection={hidden:false};
@@ -399,6 +406,8 @@ const root={
     if(sel==='#conn-workspace-section')return workspaceSection;
     if(sel==='#conn-account-section')return accountSection;
     if(sel==='#conn-refresh')return refreshBtn;
+    if(sel==='#conn-key')return keyEl;
+    if(sel==='#conn-key-input')return null;
     if(sel==='#conn-alert')return alertEl;
     if(sel==='#conn-no-match')return noMatch;
     if(sel.startsWith('#err-')){const id=sel.slice(5);return errs[id]||(errs[id]={hidden:true,textContent:''});}
@@ -627,8 +636,9 @@ class ConnectorsViewTests(unittest.TestCase):
         self.assertIn("import {pollLine} from '../core/connections.js';", self.view)
         self.assertNotIn("const esc=", self.view)
         self.assertNotIn("function rel(", self.view)
-        # session.js has one importer, so its stamp stays on that import
-        self.assertIn("from '../core/session.js?v=" + STAMP + "';", self.view)
+        # BYO key: no XO session module, no session header
+        self.assertNotIn("core/session.js", self.view)
+        self.assertNotIn("sessionHeaders", self.view)
 
     def test_every_call_carries_api_base(self) -> None:
         self.assertIn("const BASE=API_BASE+'/api/connectors/composio';", self.view)
@@ -788,7 +798,7 @@ class AccountLabelTests(unittest.TestCase):
         self.assertIn(".conn-poll-account{", css)
 
     def test_one_list_read_per_load_and_one_lookup_per_toolkit(self) -> None:
-        load = slice_between(self.view, "async function loadAll(){", "function renderSignedOut(){")
+        load = slice_between(self.view, "async function loadAll(){", "function renderKeyPanel(){")
         self.assertIn("accountAsked=new Set();\n    const accounts=loadAccounts();", load)
         self.assertIn("await accounts;\n    renderGrid();\n    askAccounts();", load)
         self.assertLess(load.index("const accounts=loadAccounts();"), load.index("apiFetch(BASE+'/toolkits'"))
@@ -866,15 +876,6 @@ class AccountLabelTests(unittest.TestCase):
             self.assertIsNone(DASHES.search(read(rel)), rel)
 
 
-class SessionModuleTests(unittest.TestCase):
-    def test_imports_api_bare_and_mints_through_api_base(self) -> None:
-        session = read("js/core/session.js")
-        self.assertIn("import {API_BASE,apiFetch} from './api.js';", session)
-        self.assertNotIn("api.js?v=", session)
-        self.assertIn("apiFetch(API_BASE+'/xo-auth/session/self')", session)
-        self.assertNotRegex(session, r"apiFetch\('/")
-
-
 class SharingViewTests(unittest.TestCase):
     def test_commit_row_has_no_dangling_separator_without_a_date(self) -> None:
         pane = read("js/views/sharing.js")
@@ -914,7 +915,7 @@ class ShellTests(unittest.TestCase):
             self.assertIn("./" + module + ".js?v=" + footer_stamp + "'", app)
         self.assertIn("./core/toolbar.js?v=20260915-cmdk6'", app)
         self.assertIn("./core/project-actions.js?v=20260914-details1'", app)
-        self.assertIn("./views/connectors.js?v=20260914-setupapps1'", app)
+        self.assertIn("./views/connectors.js?v=20260917-byok1'", app)
         html = read("index.html")
         for sheet in ("projects", "project-management", "inbox-activity",
                       "connectors", "sessions", "command-palette"):
@@ -958,7 +959,7 @@ class ShellTests(unittest.TestCase):
 
     def test_touched_files_carry_no_dashes(self) -> None:
         for rel in ("js/core/ui.js", "js/core/api.js", "js/core/connections.js", "js/core/registry.js",
-                    "js/core/session.js", "js/views/inbox.js", "js/views/connectors.js",
+                    "js/views/inbox.js", "js/views/connectors.js",
                     "js/views/sharing.js", "js/views/sharing_data.js", "js/views/wiki.js",
                     "js/app.js", "index.html"):
             self.assertIsNone(DASHES.search(read(rel)), rel)
