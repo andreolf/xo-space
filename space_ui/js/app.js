@@ -10,7 +10,7 @@ import {initSectionNav} from './core/section-nav.js?v=20260921-refresh1';
 import {PRIMARY_TABS} from './core/navigation.js?v=20260915-agents2';
 import {initPreview} from './core/preview.js?v=20260915-agents2';
 import {initCommandPalette} from './core/command-palette.js?v=20260921-refresh1';
-import {dashboardView,graphView,timeView,initProjectRootPicker} from './views/atlas.js?v=20260921-refresh1';
+import {dashboardView,graphView,timeView,initProjectRootPicker} from './views/atlas.js?v=20260922-theme5';
 import {createAgentViews} from './views/sessions.js?v=20260915-footer1';
 import {createInboxViews,initInboxBadge} from './views/inbox.js?v=20260921-refresh1';
 import {createActivityViews} from './views/inbox-activity.js?v=20260915-agents2';
@@ -22,7 +22,8 @@ import sharingView from './views/sharing.js?v=20260921-refresh1';
    and register it below to bring the tab back. */
 import wikiView from './views/wiki.js?v=20260916-jobs3';
 import quirqView from './views/quirq.js?v=20260921-refresh1';
-import {createSetupViews} from './views/setup.js?v=20260922-refresh2';
+import {createSetupViews} from './views/setup.js?v=20260922-theme5';
+import {loadTheme} from './core/theme.js?v=20260922-theme4';
 import {loadBranding} from './core/branding.js?v=20260921-branding1';
 import connectorsView from './views/connectors.js?v=20260921-refresh1';
 
@@ -56,6 +57,7 @@ function initTopbarInset(){
 }
 try{initTopbarInset();}catch(err){console.error('Topbar measurement failed:',err);}
 loadBranding();
+loadTheme();
 
 /* Before startRegistry: its first switchTo announces the active view, and a
    listener registered afterwards would miss it on a deep link. */
