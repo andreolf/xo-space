@@ -559,7 +559,8 @@ class SpaceWikiTests(unittest.TestCase):
         self.assertIn('id="prj-filter"', projects)
         self.assertNotIn("data-project-tab=", projects)
         self.assertIn('data-panel="files"', projects)
-        self.assertIn("Refresh files", projects)
+        self.assertNotIn("Refresh files", projects)
+        self.assertNotIn("prj-detail-refresh", projects)
         self.assertIn("if(expanded&&!items.some", projects)
         # Data rows have a single file-browser action; management lives in Manage.
         self.assertIn('<button class="prj-row-head"', projects)
@@ -683,10 +684,12 @@ class SpaceWikiTests(unittest.TestCase):
         facts most likely to rot are pinned: the branch model, the four
         invariants, the validation commands, and the README pointing at it."""
         guide = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-        # Work lands on development; main is the release branch.
-        self.assertIn("target `development`", guide)
+        # Work lands on main; development is the maintainers' staging branch
+        # and never a PR target.
+        self.assertIn("Branch from `main`, target `main`", guide)
+        self.assertIn("Do not target it with a pull request", guide)
         self.assertIn("publish-container.yml", guide)
-        self.assertNotIn("Branch from and target **`main`**", guide)
+        self.assertNotIn("target `development`", guide)
         for invariant in (
             "modularity invariant", "Thin routers", "project folder is sacred",
             "belongs to the watcher",
